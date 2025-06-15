@@ -5,7 +5,10 @@
  */
 package io.flutter.run;
 
-import com.intellij.execution.*;
+import com.intellij.execution.DefaultExecutionResult;
+import com.intellij.execution.ExecutionException;
+import com.intellij.execution.ExecutionResult;
+import com.intellij.execution.Executor;
 import com.intellij.execution.configurations.CommandLineState;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.execution.configurations.RunProfile;
@@ -21,6 +24,7 @@ import com.intellij.execution.runners.RunContentBuilder;
 import com.intellij.execution.ui.ConsoleView;
 import com.intellij.execution.ui.ConsoleViewContentType;
 import com.intellij.execution.ui.RunContentDescriptor;
+import com.intellij.execution.ui.RunContentManager;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.Separator;
@@ -46,10 +50,13 @@ import io.flutter.run.common.RunMode;
 import io.flutter.run.daemon.DaemonConsoleView;
 import io.flutter.run.daemon.DeviceService;
 import io.flutter.run.daemon.FlutterApp;
+import io.flutter.toolwindow.ToolWindowBadgeUpdater;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -135,12 +142,11 @@ public class LaunchState extends CommandLineState {
     device.bringToFront();
 
     // Check for and display any analysis errors when we launch an app.
-    if (env.getRunProfile() instanceof SdkRunConfig) {
+    if (env.getRunProfile() instanceof SdkRunConfig config) {
       final Class dartExecutionHelper = classForName("com.jetbrains.lang.dart.ide.runner.DartExecutionHelper");
       if (dartExecutionHelper != null) {
         final String message = ("<a href='open.dart.analysis'>Analysis issues</a> may affect " +
                                 "the execution of '" + env.getRunProfile().getName() + "'.");
-        final SdkRunConfig config = (SdkRunConfig)env.getRunProfile();
         final SdkFields sdkFields = config.getFields();
         final MainFile mainFile = MainFile.verify(sdkFields.getFilePath(), env.getProject()).get();
 
@@ -151,19 +157,46 @@ public class LaunchState extends CommandLineState {
     final FlutterLaunchMode launchMode = FlutterLaunchMode.fromEnv(env);
     final RunContentDescriptor descriptor;
     if (launchMode.supportsDebugConnection()) {
+      ToolWindowBadgeUpdater.updateBadgedIcon(app, project);
       descriptor = createDebugSession(env, app, result).getRunContentDescriptor();
     }
     else {
       descriptor = new RunContentBuilder(result, env).showRunContent(env.getContentToReuse());
     }
+
+    // Add the device name for the run descriptor.
+    // The descriptor shows the run configuration name (e.g., `main.dart`) by default;
+    // adding the device name will help users identify the instance when trying to operate a specific one.
+    final String nameWithDeviceName = descriptor.getDisplayName() + " (" + device.deviceName() + ")";
+    boolean displayNameUpdated = false;
     try {
-      final Field f = descriptor.getClass().getDeclaredField("myDisplayName");
+      // Find "myDisplayNameView" for 2024+ builds.
+      // https://github.com/JetBrains/intellij-community/blob/idea/241.14494.240/platform/execution/src/com/intellij/execution/ui/RunContentDescriptor.java#L33
+      final Field f = descriptor.getClass().getDeclaredField("myDisplayNameView");
       f.setAccessible(true);
-      f.set(descriptor, descriptor.getDisplayName() + " (" + device.deviceName() + ")");
+      Object viewInstance = f.get(descriptor);
+      if (viewInstance != null) {
+        final Method setValueMethod = viewInstance.getClass().getMethod("setValue", Object.class);
+        setValueMethod.invoke(viewInstance, nameWithDeviceName);
+        displayNameUpdated = true;
+      }
     }
-    catch (IllegalAccessException | NoSuchFieldException e) {
+    catch (IllegalAccessException | InvocationTargetException | NoSuchFieldException | NoSuchMethodException e) {
       LOG.info(e);
     }
+    if (!displayNameUpdated) {
+      try {
+        // Find "myDisplayName" for 2023 builds.
+        // https://github.com/JetBrains/intellij-community/blob/idea/231.8109.175/platform/execution/src/com/intellij/execution/ui/RunContentDescriptor.java#L30
+        final Field f = descriptor.getClass().getDeclaredField("myDisplayName");
+        f.setAccessible(true);
+        f.set(descriptor, nameWithDeviceName);
+      }
+      catch (IllegalAccessException | NoSuchFieldException e) {
+        LOG.info(e);
+      }
+    }
+
     return descriptor;
   }
 
@@ -181,7 +214,7 @@ public class LaunchState extends CommandLineState {
       project,
       "No connected devices found; please connect a device, or see flutter.dev/setup for getting started instructions.",
       "No Connected Devices Found",
-      new String[]{Messages.OK_BUTTON}, 0, AllIcons.General.InformationDialog);
+      new String[]{Messages.getOkButton()}, 0, AllIcons.General.InformationDialog);
   }
 
   @NotNull
@@ -253,7 +286,7 @@ public class LaunchState extends CommandLineState {
   @Override
   public @NotNull
   ExecutionResult execute(@NotNull Executor executor, @NotNull ProgramRunner runner) throws ExecutionException {
-    throw new ExecutionException("not implemented"); // Not used; launch() does this.
+    throw new ExecutionException("Not implemented"); // Not used; launch() does this.
   }
 
   @Override
@@ -362,7 +395,7 @@ public class LaunchState extends CommandLineState {
 
       // See if we should issue a hot-reload.
       final List<RunContentDescriptor> runningProcesses =
-        ExecutionManager.getInstance(env.getProject()).getContentManager().getAllDescriptors();
+        RunContentManager.getInstance(env.getProject()).getAllDescriptors();
 
       final ProcessHandler process = getRunningAppProcess(launchState.runConfig);
       if (process != null) {
@@ -419,15 +452,18 @@ public class LaunchState extends CommandLineState {
    * Returns the currently running app for the given RunConfig, if any.
    */
   @Nullable
-  public static ProcessHandler getRunningAppProcess(RunConfig config) {
+  public static ProcessHandler getRunningAppProcess(@NotNull RunConfig config) {
     final Project project = config.getProject();
-    final List<RunContentDescriptor> runningProcesses =
-      ExecutionManager.getInstance(project).getContentManager().getAllDescriptors();
+    if (project != null) {
+      final List<RunContentDescriptor> runningProcesses =
+        RunContentManager.getInstance(project).getAllDescriptors();
 
-    for (RunContentDescriptor descriptor : runningProcesses) {
-      final ProcessHandler process = descriptor.getProcessHandler();
-      if (process != null && !process.isProcessTerminated() && process.getUserData(FLUTTER_RUN_CONFIG_KEY) == config) {
-        return process;
+      for (RunContentDescriptor descriptor : runningProcesses) {
+        if (descriptor == null) continue;
+        final ProcessHandler process = descriptor.getProcessHandler();
+        if (process != null && !process.isProcessTerminated() && process.getUserData(FLUTTER_RUN_CONFIG_KEY) == config) {
+          return process;
+        }
       }
     }
 
@@ -436,5 +472,5 @@ public class LaunchState extends CommandLineState {
 
   private static final Key<RunConfig> FLUTTER_RUN_CONFIG_KEY = new Key<>("FLUTTER_RUN_CONFIG_KEY");
 
-  private static final Logger LOG = Logger.getInstance(LaunchState.class);
+  private static final @NotNull Logger LOG = Logger.getInstance(LaunchState.class);
 }
