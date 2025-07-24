@@ -1,0 +1,43 @@
+name: Manual Release Build
+
+on:
+  push:
+    branches:
+      - 'public/feat/optional-android-dep'
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [2024.3, 2025.1]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Build ${{ matrix.version }}
+        run: ./tool/github.sh
+        env:
+          IDEA_VERSION: ${{ matrix.version }}
+
+      - name: Get Short Commit Hash
+        id: short_hash
+        run: echo "::set-output name=hash::$(git rev-parse --short HEAD)"
+
+      - name: Move built files
+        run: mv releases/release_master/${{ matrix.version }}/flutter-intellij.zip releases/flutter-intellij-${{ matrix.version }}.zip
+      - name: Releasing assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release-${{ steps.short_hash.outputs.hash }}
+          tag_name: release-${{ steps.short_hash.outputs.hash }}
+          files: |
+            releases/flutter-intellij-${{ matrix.version }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ strategy.job-index }}
+          path: releases/flutter-intellij-${{ matrix.version }}.zip
