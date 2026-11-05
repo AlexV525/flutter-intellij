@@ -11,7 +11,7 @@ import io.flutter.FlutterUtils;
 import io.flutter.logging.PluginLogger;
 import org.jetbrains.annotations.NotNull;
 
-import javax.swing.*;
+import javax.swing.Icon;
 import java.io.IOException;
 import java.util.Properties;
 
@@ -27,13 +27,8 @@ public class FlutterMaterialIcons {
       icons.load(FlutterMaterialIcons.class.getResourceAsStream("/flutter/icons/material.properties"));
     }
     catch (IOException e) {
-      FlutterUtils.warn(LOG, e);
+      FlutterUtils.warn(LOG, "Failed to load material icons", e, true);
     }
-  }
-
-  public static Icon getIconForHex(String hexValue) {
-    final String iconName = icons.getProperty(hexValue + ".codepoint");
-    return getIcon(iconName);
   }
 
   public static Icon getIconForName(String name) {

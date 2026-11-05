@@ -12,7 +12,6 @@ import com.intellij.execution.filters.Filter;
 import com.intellij.execution.filters.HyperlinkInfo;
 import com.intellij.execution.filters.OpenFileHyperlinkInfo;
 import com.intellij.execution.process.ColoredProcessHandler;
-import com.intellij.execution.process.ProcessAdapter;
 import com.intellij.execution.process.ProcessEvent;
 import com.intellij.openapi.editor.markup.EffectType;
 import com.intellij.openapi.editor.markup.TextAttributes;
@@ -26,10 +25,11 @@ import io.flutter.FlutterMessages;
 import io.flutter.FlutterUtils;
 import io.flutter.sdk.FlutterSdk;
 import io.flutter.utils.OpenApiUtils;
+import io.flutter.utils.ProcessAdapter;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.*;
+import java.awt.Font;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -94,19 +94,17 @@ public class FlutterConsoleFilter implements Filter {
     final VirtualFile[] roots = OpenApiUtils.getContentRoots(module);
     for (VirtualFile root : roots) {
       if (root == null) continue;
-      if (!pathPart.isEmpty()) {
-        final String baseDirPath = root.getPath();
-        final String path = baseDirPath + "/" + pathPart;
-        VirtualFile file = findFile(path);
-        if (file == null) {
-          // check example dir too
-          // TODO(pq): remove when `example` is a content root: https://github.com/flutter/flutter-intellij/issues/2519
-          final String exampleDirRelativePath = baseDirPath + "/example/" + pathPart;
-          file = findFile(exampleDirRelativePath);
-        }
-        if (file != null) {
-          return file;
-        }
+      final String baseDirPath = root.getPath();
+      final String path = baseDirPath + "/" + pathPart;
+      VirtualFile file = findFile(path);
+      if (file == null) {
+        // check example dir too
+        // TODO(pq): remove when `example` is a content root: https://github.com/flutter/flutter-intellij/issues/2519
+        final String exampleDirRelativePath = baseDirPath + "/example/" + pathPart;
+        file = findFile(exampleDirRelativePath);
+      }
+      if (file != null) {
+        return file;
       }
     }
 

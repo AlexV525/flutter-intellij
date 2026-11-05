@@ -13,10 +13,11 @@ import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Computable;
 import icons.FlutterIcons;
+import io.flutter.FlutterUtils;
 import io.flutter.ObservatoryConnector;
-import io.flutter.bazel.WorkspaceCache;
 import io.flutter.devtools.DevToolsIdeFeature;
 import io.flutter.devtools.DevToolsUrl;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.daemon.DevToolsService;
 import io.flutter.run.daemon.FlutterApp;
 import io.flutter.sdk.FlutterSdk;
@@ -24,12 +25,13 @@ import io.flutter.utils.AsyncUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.List;
 import java.util.Objects;
 
 public class OpenDevToolsAction extends DumbAwareAction {
-  private static final @NotNull Logger LOG = Logger.getInstance(OpenDevToolsAction.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(OpenDevToolsAction.class);
   private static final String title = "Open Flutter DevTools in Browser";
-  private final @Nullable ObservatoryConnector myConnector;
+  private @Nullable ObservatoryConnector myConnector;
   private final Computable<Boolean> myIsApplicable;
 
   public OpenDevToolsAction() {
@@ -70,13 +72,26 @@ public class OpenDevToolsAction extends DumbAwareAction {
       return;
     }
 
+    // This action is registered in plugin.xml with the default constructor.
+    // Therefore, if a user triggers this from the IDE, even if there is a
+    // running Flutter app myConnector will be null. In that case, check for a
+    // Flutter app first and use its connector instead.
+    // TODO(https://github.com/flutter/flutter-intellij/issues/8583): Open the
+    // running app instead of the first one listed in the project processes.
+    if (myConnector == null) {
+      final List<FlutterApp> apps = FlutterApp.allFromProjectProcess(project);
+      if (!apps.isEmpty()) {
+        myConnector = apps.get(0).getConnector();
+      }
+    }
+
     AsyncUtils.whenCompleteUiThread(Objects.requireNonNull(DevToolsService.getInstance(project).getDevToolsInstance()), (instance, ex) -> {
       if (project.isDisposed()) {
         return;
       }
 
       if (ex != null) {
-        LOG.error(ex);
+        FlutterUtils.error(LOG, "Exception in getDevToolsInstance", ex, true);
         return;
       }
 
@@ -88,7 +103,6 @@ public class OpenDevToolsAction extends DumbAwareAction {
         .setDevToolsPort(instance.port())
         .setVmServiceUri(serviceUrl)
         .setFlutterSdkVersion(flutterSdk == null ? null : flutterSdk.getVersion())
-        .setWorkspaceCache(WorkspaceCache.getInstance(project))
         .setIdeFeature(DevToolsIdeFeature.RUN_CONSOLE)
         .build()
         .getUrlString();

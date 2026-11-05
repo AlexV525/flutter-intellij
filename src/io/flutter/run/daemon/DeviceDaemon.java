@@ -16,14 +16,12 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.ui.Messages;
-import com.intellij.openapi.util.SystemInfo;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
+import com.jetbrains.lang.dart.analytics.Analytics;
 import io.flutter.FlutterMessages;
 import io.flutter.FlutterUtils;
 import io.flutter.android.IntelliJAndroidSdk;
-import io.flutter.bazel.Workspace;
-import io.flutter.bazel.WorkspaceCache;
 import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterDevice;
 import io.flutter.sdk.FlutterSdk;
@@ -32,16 +30,23 @@ import io.flutter.settings.FlutterSettings;
 import io.flutter.utils.FlutterModuleUtils;
 import io.flutter.utils.MostlySilentColoredProcessHandler;
 import io.flutter.utils.OpenApiUtils;
+import io.flutter.utils.SystemUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
+import javax.swing.JComponent;
+import javax.swing.JPanel;
+import javax.swing.JTextPane;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -117,7 +122,8 @@ class DeviceDaemon {
    */
   void shutdown() {
     if (!process.isProcessTerminated()) {
-      LOG.info("shutting down Flutter device daemon #" + id + ": " + command.toString(FlutterSettings.getInstance().isFilePathLoggingEnabled()));
+      LOG.info(
+        "shutting down Flutter device daemon #" + id + ": " + command.toString(FlutterSettings.getInstance().isFilePathLoggingEnabled()));
     }
     listener.running.set(false);
     process.destroyProcess();
@@ -135,15 +141,6 @@ class DeviceDaemon {
     }
 
     final String androidHome = IntelliJAndroidSdk.chooseAndroidHome(project, false);
-
-    // See if the Bazel workspace provides a script.
-    final Workspace workspace = WorkspaceCache.getInstance(project).get();
-    if (workspace != null) {
-      final String script = workspace.getDaemonScript();
-      if (script != null) {
-        return new Command(workspace.getRoot().getPath(), script, ImmutableList.of(), androidHome);
-      }
-    }
 
     // Otherwise, use the Flutter SDK.
     final FlutterSdk sdk = FlutterSdk.getFlutterSdk(project);
@@ -169,7 +166,7 @@ class DeviceDaemon {
   }
 
   private static boolean usesFlutter(@NotNull final Project project) {
-    return FlutterModuleUtils.isFlutterBazelProject(project) || FlutterModuleUtils.hasFlutterModule(project);
+    return FlutterModuleUtils.hasFlutterModule(project);
   }
 
   /**
@@ -209,7 +206,6 @@ class DeviceDaemon {
                        Runnable deviceChanged,
                        Consumer<String> processStopped) throws ExecutionException {
       final int daemonId = nextDaemonId.incrementAndGet();
-      //noinspection UnnecessaryToStringCall
       LOG.info("starting Flutter device daemon #" + daemonId + ": " + toString(FlutterSettings.getInstance().isFilePathLoggingEnabled()));
       // The mostly silent process handler reduces CPU usage of the daemon process.
       final ProcessHandler process = new MostlySilentColoredProcessHandler(toCommandLine());
@@ -221,6 +217,7 @@ class DeviceDaemon {
         final DaemonApi api = new DaemonApi(process);
         final Listener listener = new Listener(daemonId, api, devices, deviceChanged, processStopped);
         api.listen(process, listener);
+        process.startNotify();
 
         final Future<Void> ready = listener.connected.thenCompose((Void ignored) -> api.enableDeviceEvents());
 
@@ -271,7 +268,7 @@ class DeviceDaemon {
           }
           catch (java.util.concurrent.ExecutionException e) {
             // This is not a user facing crash - we log (and no devices will be discovered).
-            FlutterUtils.warn(LOG, e, true);
+            FlutterUtils.warn(LOG, "Error while starting device daemon", e, true);
           }
         }
       }
@@ -309,6 +306,7 @@ class DeviceDaemon {
       for (String param : parameters) {
         result.addParameter(param);
       }
+      Analytics.updateEnvironment(result);
       return result;
     }
 
@@ -448,7 +446,7 @@ class DeviceDaemon {
       setTitle("Flutter Device Daemon Crash");
       myPanel = new JPanel();
       myTextPane = new JTextPane();
-      final String os = SystemInfo.getOsNameAndVersion();
+      final String os = SystemUtils.getOsNameAndVersion();
       final String link = "https://www.google.com/search?q=increase maximum file handles " + os;
       Messages.installHyperlinkSupport(myTextPane);
       final String message =

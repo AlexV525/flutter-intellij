@@ -9,6 +9,8 @@ import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
+import com.jetbrains.lang.dart.analytics.Analytics;
+import com.jetbrains.lang.dart.analytics.AnalyticsData;
 import io.flutter.FlutterBundle;
 import io.flutter.FlutterUtils;
 import org.jetbrains.annotations.NotNull;
@@ -33,6 +35,8 @@ public class RefreshToolWindowAction extends DumbAwareAction {
     if (project == null) {
       return;
     }
+
+    Analytics.report(AnalyticsData.forAction(this, event));
 
     Optional.ofNullable(
         FlutterUtils.embeddedBrowser(project))

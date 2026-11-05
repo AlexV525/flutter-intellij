@@ -8,7 +8,6 @@ package io.flutter.android;
 import com.intellij.execution.ExecutionException;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.execution.process.ColoredProcessHandler;
-import com.intellij.execution.process.ProcessAdapter;
 import com.intellij.execution.process.ProcessEvent;
 import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.openapi.diagnostic.Logger;
@@ -17,7 +16,9 @@ import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.SystemInfo;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-import io.flutter.FlutterUtils;
+import io.flutter.logging.PluginLogger;
+import io.flutter.settings.FlutterSettings;
+import io.flutter.utils.ProcessAdapter;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -29,7 +30,7 @@ import java.util.List;
  * A wrapper around an Android SDK on disk.
  */
 public class AndroidSdk {
-  private static final @NotNull Logger LOG = Logger.getInstance(AndroidSdk.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(AndroidSdk.class);
 
   @Nullable
   public static AndroidSdk createFromProject(@NotNull Project project) {
@@ -128,7 +129,12 @@ public class AndroidSdk {
       return emulators;
     }
     catch (ExecutionException | RuntimeException e) {
-      FlutterUtils.warn(LOG, "Error listing android emulators", e);
+      if (FlutterSettings.getInstance().isFilePathLoggingEnabled()) {
+        LOG.warn("Error listing android emulators", e);
+      }
+      else {
+        LOG.warn("Error listing android emulators");
+      }
       return Collections.emptyList();
     }
   }

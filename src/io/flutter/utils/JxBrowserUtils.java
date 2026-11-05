@@ -25,23 +25,27 @@ public class JxBrowserUtils {
     String name = "";
     final boolean is64Bit = Objects.requireNonNull(CpuArch.CURRENT).width == 64;
     if (SystemInfo.isMac) {
-      if (SystemInfo.isAarch64){
+      if (CpuArch.isArm64()) {
         name = "mac-arm";
-      } else {
+      }
+      else {
         name = "mac";
       }
-    } else if (SystemInfo.isWindows) {
+    }
+    else if (SystemInfo.isWindows) {
       if (CpuArch.is32Bit()) {
         name = "win32";
-      } else if (is64Bit) {
+      }
+      else if (is64Bit) {
         name = "win64";
       }
-    } else if (SystemInfo.isLinux && is64Bit) {
+    }
+    else if (SystemInfo.isLinux && is64Bit) {
       name = "linux64";
     }
 
     if (name.isEmpty()) {
-      throw new FileNotFoundException("Unable to find matching JxBrowser platform file for: " + SystemInfo.getOsNameAndVersion());
+      throw new FileNotFoundException("Unable to find matching JxBrowser platform file for: " + SystemUtils.getOsNameAndVersion());
     }
 
     return String.format("%s-%s-%s.%s", JXBROWSER_FILE_PREFIX, name, JXBROWSER_FILE_VERSION, JXBROWSER_FILE_SUFFIX);

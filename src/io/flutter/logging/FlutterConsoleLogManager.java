@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * console.
  */
 public class FlutterConsoleLogManager {
-  private static final @NotNull Logger LOG = Logger.getInstance(FlutterConsoleLogManager.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(FlutterConsoleLogManager.class);
 
   private static final String consolePreferencesSetKey = "io.flutter.console.preferencesSet";
   private static final String DEEP_LINK_GROUP_ID = "deeplink";
@@ -135,7 +135,11 @@ public class FlutterConsoleLogManager {
             processFlutterErrorEvent(diagnosticsNode);
           }
           catch (Throwable t) {
-            LOG.warn(t);
+            if (FlutterSettings.getInstance().isVerboseLogging()) {
+              LOG.warn(t);
+            } else {
+              LOG.warn("Error processing FlutterErrorEvent: " + t.getMessage());
+            }
           }
           finally {
             queueLength.decrementAndGet();
@@ -148,7 +152,11 @@ public class FlutterConsoleLogManager {
       }
     }
     catch (Throwable t) {
-      LOG.warn(t);
+      if (FlutterSettings.getInstance().isFilePathLoggingEnabled()) {
+        LOG.warn(t);
+      } else {
+        LOG.warn("Error handling FlutterErrorEvent: " + t.getMessage());
+      }
     }
   }
 
@@ -166,7 +174,11 @@ public class FlutterConsoleLogManager {
         }
       }
       catch (InterruptedException e) {
-        LOG.error(e);
+        if (FlutterSettings.getInstance().isVerboseLogging()) {
+          LOG.error(e);
+        } else {
+          LOG.error("Exception when flushing FlutterErrorQueue: " + e.getMessage());
+        }
       }
     }
   }
@@ -382,7 +394,7 @@ public class FlutterConsoleLogManager {
         Project project = app.getProject();
         if (!project.isDisposed()) {
           final EmbeddedBrowser browser = FlutterUtils.embeddedBrowser(project);
-          if (browser != null) {
+          if (browser != null && widgetId != null) {
             browser.updatePanelToWidget(widgetId);
           }
         }
@@ -411,7 +423,11 @@ public class FlutterConsoleLogManager {
         processLoggingEvent(event);
       }
       catch (Throwable t) {
-        LOG.warn(t);
+        if (FlutterSettings.getInstance().isVerboseLogging()) {
+          LOG.warn(t);
+        } else {
+          LOG.warn("Error processing LoggingEvent: " + t.getMessage());
+        }
       }
     });
   }

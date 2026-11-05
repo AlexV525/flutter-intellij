@@ -26,11 +26,11 @@ public final class FlutterSdkVersion implements Comparable<FlutterSdkVersion> {
    * Note, this is for the Flutter SDK version, not the Dart SDK version, this mapping can be found:
    * <a href="https://docs.flutter.dev/release/archive">Flutter SDK Release Archive list</a>.
    * <p>
-   * This version was updated last on June 24, 2025.
+   * This version was updated last on March 26, 2026.
    */
   @VisibleForTesting
   @NotNull
-  public static final FlutterSdkVersion MIN_SDK_SUPPORTED = new FlutterSdkVersion("3.13");
+  public static final FlutterSdkVersion MIN_SDK_SUPPORTED = new FlutterSdkVersion("3.19.4");
 
   /**
    * The minimum version of the Flutter SDK that will be supported for 3 more months. A version less than this is either not supported or
@@ -39,11 +39,11 @@ public final class FlutterSdkVersion implements Comparable<FlutterSdkVersion> {
    * Note, this is for the Flutter SDK version, not the Dart SDK version, this mapping can be found:
    * <a href="https://docs.flutter.dev/release/archive">Flutter SDK Release Archive list</a>.
    * <p>
-   * This version was updated last on June 24, 2025.
+   * This version was updated last on March 26, 2026.
    */
   @VisibleForTesting
   @NotNull
-  public static final FlutterSdkVersion MIN_SDK_WITHOUT_SUNSET_WARNING = new FlutterSdkVersion("3.16");
+  public static final FlutterSdkVersion MIN_SDK_WITHOUT_SUNSET_WARNING = new FlutterSdkVersion("3.22.2");
 
   @NotNull
   private static final FlutterSdkVersion MIN_SUPPORTS_TOOL_EVENT_STREAM = new FlutterSdkVersion("3.7.1");
@@ -59,6 +59,9 @@ public final class FlutterSdkVersion implements Comparable<FlutterSdkVersion> {
 
   @NotNull
   public static final FlutterSdkVersion MIN_SUPPORTS_PROPERTY_EDITOR = new FlutterSdkVersion("3.32.0-0.1.pre");
+
+  @NotNull
+  public static final FlutterSdkVersion MIN_SUPPORTS_WIDGET_PREVIEW = new FlutterSdkVersion("3.38.0-0.0.pre");
 
   @NotNull
   public static final String UNKNOWN_VERSION = "unknown version";
@@ -129,7 +132,6 @@ public final class FlutterSdkVersion implements Comparable<FlutterSdkVersion> {
           final Map<String, Object> json = new Gson().fromJson(data, new TypeToken<Map<String, Object>>() {
           }.getType());
           if (json != null && json.containsKey("frameworkVersion")) {
-            System.out.println("FlutterSdkVersion.readVersionString NEW " + json.get("frameworkVersion"));
             return (String)json.get("frameworkVersion");
           }
         }
@@ -169,6 +171,10 @@ public final class FlutterSdkVersion implements Comparable<FlutterSdkVersion> {
 
   public boolean canUsePropertyEditor() {
     return supportsVersion(MIN_SUPPORTS_PROPERTY_EDITOR);
+  }
+
+  public boolean canUseWidgetPreview() {
+    return supportsVersion(MIN_SUPPORTS_WIDGET_PREVIEW);
   }
 
   public boolean canUseDevToolsMultiEmbed() {

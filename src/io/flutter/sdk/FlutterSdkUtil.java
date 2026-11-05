@@ -36,12 +36,16 @@ import io.flutter.utils.SystemUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
+import javax.swing.DefaultComboBoxModel;
+import javax.swing.JComboBox;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.*;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 public class FlutterSdkUtil {
   /**
@@ -97,14 +101,15 @@ public class FlutterSdkUtil {
    */
   public static void addKnownSDKPathsToCombo(@NotNull JComboBox combo) {
     // First, get the current path from the combo box on the EDT.
-    final String currentPath = combo.getEditor().getItem().toString().trim();
-    final Set<String> pathsToShow = new LinkedHashSet<>();
+    final Object initialItem = combo.getEditor().getItem();
+    final String currentPath = initialItem != null ? initialItem.toString().trim() : "";
+    final Set<String> initialPaths = new LinkedHashSet<>();
     if (!currentPath.isEmpty()) {
-      pathsToShow.add(currentPath);
+      initialPaths.add(currentPath);
     }
 
     // Now, run the slow operation (finding valid SDK paths) on a background thread.
-    ApplicationManager.getApplication().executeOnPooledThread(() -> {
+    OpenApiUtils.safeExecuteOnPooledThread(() -> {
       final String[] knownPaths = getKnownFlutterSdkPaths();
       final Set<String> validPaths = new LinkedHashSet<>();
       for (String path : knownPaths) {
@@ -115,16 +120,27 @@ public class FlutterSdkUtil {
       }
 
       // After the slow operation is complete, switch back to the EDT to update the UI.
-      ApplicationManager.getApplication().invokeLater(() -> {
+      OpenApiUtils.safeInvokeLater(() -> {
         // This code runs on the EDT.
+        final Object currentEditorItem = combo.getEditor().getItem();
+        final String activePath = currentEditorItem != null ? currentEditorItem.toString().trim() : "";
+
+        final Set<String> pathsToShow = new LinkedHashSet<>();
+        if (!activePath.isEmpty()) {
+          pathsToShow.add(activePath);
+        }
+        pathsToShow.addAll(initialPaths);
         pathsToShow.addAll(validPaths);
 
         // Update the combo box model with the new paths.
         //noinspection unchecked
         combo.setModel(new DefaultComboBoxModel<>(ArrayUtil.toStringArray(pathsToShow)));
 
-        // Select the first item if none is selected.
-        if (combo.getSelectedIndex() == -1 && combo.getItemCount() > 0) {
+        // Preserve active editor content or select the first item if none is selected.
+        if (!activePath.isEmpty()) {
+          combo.getEditor().setItem(activePath);
+        }
+        else if (combo.getSelectedIndex() == -1 && combo.getItemCount() > 0) {
           combo.setSelectedIndex(0);
         }
       });
@@ -208,16 +224,7 @@ public class FlutterSdkUtil {
     final File dartLibFolder = new File(path + "/bin/cache/dart-sdk/lib");
     return flutterPubspecFile.isFile() && flutterToolFile.isFile() && !dartLibFolder.isDirectory();
   }
-
-  /**
-   * Checks the workspace for any open Flutter projects.
-   *
-   * @return true if an open Flutter project is found
-   */
-  public static boolean hasFlutterModules() {
-    return Arrays.stream(ProjectManager.getInstance().getOpenProjects()).anyMatch(FlutterModuleUtils::hasFlutterModule);
-  }
-
+  
   public static boolean hasFlutterModules(@NotNull Project project) {
     return FlutterModuleUtils.hasFlutterModule(project);
   }
@@ -284,21 +291,6 @@ public class FlutterSdkUtil {
           continue;
         }
         return path;
-      }
-    }
-
-    // Next, try the obsolete .packages
-    for (PubRoot pubRoot : PubRoots.forModule(module)) {
-      final VirtualFile packagesFile = pubRoot.getPackagesFile();
-      if (packagesFile == null) {
-        continue;
-      }
-      // parse it
-      try {
-        final String contents = new String(packagesFile.contentsToByteArray(true /* cache contents */));
-        return parseFlutterSdkPath(contents);
-      }
-      catch (IOException ignored) {
       }
     }
 

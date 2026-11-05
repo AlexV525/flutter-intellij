@@ -25,7 +25,6 @@ import com.intellij.util.ui.UIUtil;
 import io.flutter.FlutterBundle;
 import io.flutter.FlutterUtils;
 import io.flutter.actions.RefreshToolWindowAction;
-import io.flutter.bazel.WorkspaceCache;
 import io.flutter.devtools.DevToolsIdeFeature;
 import io.flutter.devtools.DevToolsUrl;
 import io.flutter.devtools.DevToolsUtils;
@@ -33,6 +32,7 @@ import io.flutter.jxbrowser.FailureType;
 import io.flutter.jxbrowser.InstallationFailedReason;
 import io.flutter.jxbrowser.JxBrowserManager;
 import io.flutter.jxbrowser.JxBrowserStatus;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterDevice;
 import io.flutter.run.daemon.DevToolsInstance;
 import io.flutter.run.daemon.DevToolsService;
@@ -49,10 +49,16 @@ import org.dartlang.vm.service.VmService;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
-import java.awt.*;
-import java.util.*;
+import javax.swing.Icon;
+import javax.swing.JPanel;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import java.awt.BorderLayout;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -61,7 +67,7 @@ import java.util.concurrent.atomic.AtomicReference;
   storages = {@Storage("$WORKSPACE_FILE$")}
 )
 public class InspectorView implements Disposable {
-  private static final @NotNull Logger LOG = Logger.getInstance(InspectorView.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(InspectorView.class);
 
   public static final @NotNull String TOOL_WINDOW_ID = "Flutter Inspector";
 
@@ -106,7 +112,7 @@ public class InspectorView implements Disposable {
   public void dispose() {
     Disposer.dispose(this);
   }
-  
+
   void initToolWindow(@NotNull ToolWindow window) {
     if (window.isDisposed()) return;
 
@@ -125,6 +131,7 @@ public class InspectorView implements Disposable {
     final FlutterDevice device = app.device();
     final List<FlutterDevice> existingDevices = new ArrayList<>();
     final String tabName = device.getUniqueName(existingDevices);
+    final Icon tabIcon = device.getIcon();
 
     if (emptyContent != null) {
       contentManager.removeContent(emptyContent, true);
@@ -134,7 +141,6 @@ public class InspectorView implements Disposable {
     final String browserUrl = app.getConnector().getBrowserUrl();
     FlutterSdk flutterSdk = FlutterSdk.getFlutterSdk(app.getProject());
     FlutterSdkVersion flutterSdkVersion = flutterSdk == null ? null : flutterSdk.getVersion();
-
 
     // Register for devtools events (required for inspector->editor source linking)
     // See: https://github.com/flutter/flutter-intellij/issues/8041
@@ -151,7 +157,6 @@ public class InspectorView implements Disposable {
         .setPage("inspector")
         .setEmbed(true)
         .setFlutterSdkVersion(flutterSdkVersion)
-        .setWorkspaceCache(WorkspaceCache.getInstance(app.getProject()))
         .setIdeFeature(ideFeature)
         .build();
 
@@ -160,7 +165,7 @@ public class InspectorView implements Disposable {
       Runnable task = () -> {
         embeddedBrowserOptional().ifPresent(
           embeddedBrowser -> OpenApiUtils.safeInvokeLater(() -> {
-            embeddedBrowser.openPanel(toolWindow, tabName, devToolsUrl, (String error) -> {
+            embeddedBrowser.openPanel(toolWindow, tabName, tabIcon, new DevToolsUrlProvider(devToolsUrl), (String error) -> {
               // If the embedded browser doesn't work, offer a link to open in the regular browser.
               final List<LabelInput> inputs = Arrays.asList(
                 new LabelInput("The embedded browser failed to load. Error: " + error),
@@ -183,7 +188,6 @@ public class InspectorView implements Disposable {
           .setVmServiceUri(browserUrl)
           .setPage("inspector")
           .setFlutterSdkVersion(flutterSdkVersion)
-          .setWorkspaceCache(WorkspaceCache.getInstance(app.getProject()))
           .setIdeFeature(ideFeature)
           .build()
           .getUrlString(),
@@ -274,7 +278,7 @@ public class InspectorView implements Disposable {
 
         // TODO(helinx): Restart DevTools server if there's an error.
         if (error != null) {
-          LOG.error(error);
+          FlutterUtils.error(LOG, "Error while starting DevTools server", error, true);
           viewUtils.presentLabel(toolWindow, DEVTOOLS_FAILED_LABEL);
           return;
         }

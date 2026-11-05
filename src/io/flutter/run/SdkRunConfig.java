@@ -37,12 +37,16 @@ import com.intellij.util.concurrency.AppExecutorUtil;
 import com.intellij.util.xmlb.SkipDefaultValuesSerializationFilters;
 import com.intellij.util.xmlb.XmlSerializer;
 import com.jetbrains.lang.dart.ide.runner.DartConsoleFilter;
+import io.flutter.FlutterProjectDisposable;
 import io.flutter.FlutterUtils;
+import io.flutter.analytics.Analytics;
+import io.flutter.analytics.AnalyticsConstants;
 import io.flutter.console.FlutterConsoleFilter;
-import io.flutter.dart.FlutterDartAnalysisServer;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.common.RunMode;
 import io.flutter.run.daemon.FlutterApp;
 import io.flutter.sdk.FlutterSdkManager;
+import io.flutter.settings.FlutterSettings;
 import org.jdom.Element;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -59,7 +63,7 @@ import static java.nio.file.FileVisitResult.CONTINUE;
 public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
   implements LaunchState.RunConfig, RefactoringListenerProvider, RunConfigurationWithSuppressedDefaultRunAction {
 
-  private static final @NotNull Logger LOG = Logger.getInstance(SdkRunConfig.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(SdkRunConfig.class);
   private boolean firstRun = true;
 
   private @NotNull SdkFields fields = new SdkFields();
@@ -103,7 +107,7 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
           Files.delete(file);
         }
         catch (IOException e) {
-          FlutterUtils.warn(LOG, e);
+          FlutterUtils.warn(LOG, "Unable to delete file: " + name, e, true);
           // TODO(jacobr): consider aborting.
         }
       }
@@ -117,7 +121,7 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
 
     @Override
     public @NotNull FileVisitResult visitFileFailed(@NotNull Path file, @NotNull IOException exc) {
-      FlutterUtils.warn(LOG, exc);
+      FlutterUtils.warn(LOG, "Unable to visit file in RecursiveDeleter", exc, true);
       return CONTINUE;
     }
   }
@@ -165,7 +169,8 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
           existingJson = Files.readString(cachedParametersPath);
         }
         catch (IOException e) {
-          FlutterUtils.warn(LOG, "Unable to get existing json from " + cachedParametersPath);
+          LOG.warn("Unable to get existing json from " +
+                   (FlutterSettings.getInstance().isFilePathLoggingEnabled() ? cachedParametersPath : cachedParametersPath.getFileName()));
         }
       }
       if (!StringUtil.equals(json, existingJson)) {
@@ -187,7 +192,7 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
           Files.writeString(cachedParametersPath, json);
         }
         catch (IOException e) {
-          FlutterUtils.warn(LOG, e);
+          FlutterUtils.warn(LOG, "Unable to delete dill or write params", e, true);
         }
       }
 
@@ -199,6 +204,7 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
 
     final LaunchState launcher = new LaunchState(env, mainFile.getAppDir(), mainFile.getFile(), this, createAppCallback);
     addConsoleFilters(launcher, env, mainFile, null /* look up the module in an async read context */);
+    Analytics.recordRunOrDebugSession(AnalyticsConstants.MECHANISM_FLUTTER_APP, executor, getProject());
     return launcher;
   }
 
@@ -255,7 +261,7 @@ public class SdkRunConfig extends LocatableConfigurationBase<LaunchState>
         builder.addFilter(new UrlFilter());
         return null;
       })
-      .expireWith(FlutterDartAnalysisServer.getInstance(getProject()))
+      .expireWith(FlutterProjectDisposable.getInstance(getProject()))
       .submit(AppExecutorUtil.getAppExecutorService());
   }
 

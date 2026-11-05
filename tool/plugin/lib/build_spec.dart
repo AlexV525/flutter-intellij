@@ -30,7 +30,6 @@ class BuildSpec {
 
   // plugin.xml variables
   final String sinceBuild;
-  final String untilBuild;
   final String pluginId = 'io.flutter';
   final String? release;
   final List<String> filesToSkip;
@@ -48,7 +47,6 @@ class BuildSpec {
         androidPluginVersion = json['androidPluginVersion'] as String,
         dartPluginVersion = json['dartPluginVersion'] as String,
         sinceBuild = json['sinceBuild'] as String,
-        untilBuild = json['untilBuild'] as String,
         filesToSkip = json['filesToSkip'] as List<String>? ?? [],
         isUnitTestTarget = json['isUnitTestTarget'] == 'true',
         isTestTarget = json['isTestTarget'] == 'true',
@@ -110,7 +108,6 @@ class BuildSpec {
         'dartPluginVersion: $dartPluginVersion, '
         'javaVersion: $javaVersion, '
         'since: $sinceBuild, '
-        'until: $untilBuild, '
         'version: "$release")';
   }
 
@@ -132,35 +129,3 @@ class BuildSpec {
   }
 }
 
-/// This represents a BuildSpec that is used to generate the plugin.xml
-/// that is used during development. It needs to span all possible versions.
-/// The product-matrix.json file lists the versions in increasing build order.
-/// The first one is the earliest version used during development and the
-/// last one is the latest used during development. This BuildSpec combines
-/// those two.
-class SyntheticBuildSpec extends BuildSpec {
-  late final BuildSpec alternate;
-
-  SyntheticBuildSpec.fromJson(
-    super.json,
-    super.releaseNum,
-    List<BuildSpec> specs,
-  ) : super.fromJson() {
-    try {
-      // 'isUnitTestTarget' should always be in the spec for the latest IntelliJ (not AS).
-      alternate = specs.firstWhere((s) => s.isUnitTestTarget);
-    } on StateError catch (_) {
-      log('No build spec defines "isUnitTestTarget"');
-      exit(1);
-    }
-  }
-
-  @override
-  String get sinceBuild => alternate.sinceBuild;
-
-  @override
-  String get untilBuild => alternate.untilBuild;
-
-  @override
-  bool get isSynthetic => true;
-}

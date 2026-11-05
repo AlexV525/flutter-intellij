@@ -8,6 +8,7 @@ package io.flutter.utils;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.util.TripleFunction;
 import io.flutter.FlutterUtils;
+import io.flutter.logging.PluginLogger;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -24,7 +25,7 @@ import java.util.Properties;
 
 @SuppressWarnings("UseJBColor")
 public class IconPreviewGenerator {
-  private static final @NotNull Logger LOG = Logger.getInstance(IconPreviewGenerator.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(IconPreviewGenerator.class);
 
   @NotNull final String fontFilePath;
   int iconSize = 16;
@@ -94,7 +95,7 @@ public class IconPreviewGenerator {
         }
       }
       catch (IOException ex) {
-        FlutterUtils.warn(LOG, ex);
+        FlutterUtils.warn(LOG, "Unable to batch convert icons", ex, true);
       }
       return null;
     });
@@ -114,7 +115,7 @@ public class IconPreviewGenerator {
       result = callback.fun(image, graphics, frc);
     }
     catch (IOException | FontFormatException ex) {
-      FlutterUtils.warn(LOG, ex);
+      FlutterUtils.warn(LOG, "Unable to generate icon", ex, true);
     }
     finally {
       if (graphics != null) graphics.dispose();

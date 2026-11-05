@@ -5,17 +5,21 @@
  */
 package io.flutter.run.daemon;
 
-import com.google.common.base.Charsets;
-import com.google.gson.*;
-import com.intellij.execution.process.ProcessAdapter;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSyntaxException;
 import com.intellij.execution.process.ProcessEvent;
 import com.intellij.execution.process.ProcessHandler;
 import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.Key;
-import io.flutter.FlutterUtils;
-import io.flutter.settings.FlutterSettings;
+import com.intellij.openapi.util.text.StringUtil;
+import io.flutter.logging.PluginLogger;
 import io.flutter.utils.JsonUtils;
+import io.flutter.utils.ProcessAdapter;
 import io.flutter.utils.StdoutJsonParser;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -24,7 +28,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
-import java.util.*;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -41,7 +52,7 @@ public class DaemonApi {
 
   private static final int STDERR_LINES_TO_KEEP = 100;
   private static final Gson GSON = new Gson();
-  private static final @NotNull Logger LOG = Logger.getInstance(DaemonApi.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(DaemonApi.class);
   @NotNull private final Consumer<String> callback;
   private final AtomicInteger nextId = new AtomicInteger();
   private final Map<Integer, Command> pending = new LinkedHashMap<>();
@@ -132,9 +143,7 @@ public class DaemonApi {
         else if (outputType.equals(ProcessOutputTypes.STDOUT)) {
           final String text = event.getText();
 
-          if (FlutterSettings.getInstance().isVerboseLogging()) {
-            LOG.info("[<-- " + text.trim() + "]");
-          }
+          LOG.debug("[<-- " + text.trim() + "]");
 
           stdoutParser.appendOutput(text);
 
@@ -159,7 +168,6 @@ public class DaemonApi {
     });
 
     // All hooked up and ready to receive events.
-    process.startNotify();
   }
 
   /**
@@ -202,7 +210,7 @@ public class DaemonApi {
       cmd = pending.remove(id);
     }
     if (cmd == null) {
-      FlutterUtils.warn(LOG, "received a response for a request that wasn't sent: " + id);
+      LOG.warn("received a response for a request that wasn't sent: " + id);
       return null;
     }
     return cmd;
@@ -228,7 +236,7 @@ public class DaemonApi {
    */
   public String getStderrTail() {
     final String[] lines = stderr.toArray(new String[]{ });
-    return String.join("", lines);
+    return StringUtil.join(lines, "");
   }
 
   /**
@@ -287,19 +295,17 @@ public class DaemonApi {
   private static void sendCommand(String json, ProcessHandler handler) {
     final PrintWriter stdin = getStdin(handler);
     if (stdin == null) {
-      FlutterUtils.warn(LOG, "can't write command to Flutter process: " + json);
+      LOG.warn("can't write command to Flutter process because stdin is null: " + json);
       return;
     }
     stdin.write('[');
     stdin.write(json);
     stdin.write("]\n");
 
-    if (FlutterSettings.getInstance().isVerboseLogging()) {
-      LOG.info("[--> " + json + "]");
-    }
+    LOG.debug("[--> " + json + "]");
 
     if (stdin.checkError()) {
-      FlutterUtils.warn(LOG, "can't write command to Flutter process: " + json);
+      LOG.warn("can't write command to Flutter process due to error: " + json);
     }
   }
 
@@ -307,7 +313,7 @@ public class DaemonApi {
   private static PrintWriter getStdin(ProcessHandler processHandler) {
     final OutputStream stdin = processHandler.getProcessInput();
     if (stdin == null) return null;
-    return new PrintWriter(new OutputStreamWriter(stdin, Charsets.UTF_8));
+    return new PrintWriter(new OutputStreamWriter(stdin, StandardCharsets.UTF_8));
   }
 
   public static class RestartResult {
@@ -361,7 +367,7 @@ public class DaemonApi {
         done.complete(parseResult.apply(result));
       }
       catch (Exception e) {
-        FlutterUtils.warn(LOG, "Unable to parse response from Flutter daemon. Command was: " + this, e);
+        LOG.warn("Unable to parse response from Flutter daemon. Command was: " + this, e);
         done.completeExceptionally(e);
       }
     }

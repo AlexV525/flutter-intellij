@@ -9,6 +9,9 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.project.Project;
+import com.jetbrains.lang.dart.analytics.Analytics;
+import com.jetbrains.lang.dart.analytics.AnalyticsData;
+import icons.FlutterIcons;
 import io.flutter.android.AndroidEmulator;
 import io.flutter.sdk.AndroidEmulatorManager;
 import org.jetbrains.annotations.NotNull;
@@ -20,6 +23,9 @@ import java.util.Objects;
 import static java.util.stream.Collectors.toList;
 
 public class OpenEmulatorAction extends AnAction {
+
+  public static final String ID = "fluter.open.emulator";
+
   /**
    * Retrieve a list of {@link OpenEmulatorAction}s.
    * <p>
@@ -40,14 +46,14 @@ public class OpenEmulatorAction extends AnAction {
   final @NotNull AndroidEmulator emulator;
 
   public OpenEmulatorAction(@NotNull AndroidEmulator emulator) {
-    super("Open Android Emulator: " + emulator.getName());
-
+    super("Open Android Emulator: " + emulator.getName(), null, FlutterIcons.Android);
     this.emulator = emulator;
   }
 
   @Override
   public void actionPerformed(@NotNull AnActionEvent event) {
     emulator.startEmulator();
+    Analytics.report(AnalyticsData.forAction(ID, event.getPlace(), event.getProject()));
   }
 
   @Override

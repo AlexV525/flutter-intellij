@@ -5,10 +5,12 @@
  */
 package io.flutter.jxbrowser;
 
+import com.intellij.ide.ui.UISettingsUtils;
 import com.intellij.openapi.application.PathManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.content.ContentManager;
+import com.intellij.util.SmartList;
 import com.teamdev.jxbrowser.browser.Browser;
 import com.teamdev.jxbrowser.browser.UnsupportedRenderingModeException;
 import com.teamdev.jxbrowser.browser.callback.AlertCallback;
@@ -17,29 +19,30 @@ import com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback;
 import com.teamdev.jxbrowser.browser.event.ConsoleMessageReceived;
 import com.teamdev.jxbrowser.engine.Engine;
 import com.teamdev.jxbrowser.js.ConsoleMessage;
+import com.teamdev.jxbrowser.permission.PermissionType;
+import com.teamdev.jxbrowser.permission.callback.RequestPermissionCallback;
 import com.teamdev.jxbrowser.ui.KeyCode;
 import com.teamdev.jxbrowser.ui.event.KeyPressed;
 import com.teamdev.jxbrowser.view.swing.BrowserView;
 import com.teamdev.jxbrowser.view.swing.callback.DefaultAlertCallback;
 import com.teamdev.jxbrowser.view.swing.callback.DefaultConfirmCallback;
+import com.teamdev.jxbrowser.zoom.Zoom;
+import com.teamdev.jxbrowser.zoom.ZoomLevel;
 import io.flutter.logging.PluginLogger;
 import io.flutter.settings.FlutterSettings;
 import io.flutter.utils.AsyncUtils;
 import io.flutter.utils.JxBrowserUtils;
+import io.flutter.utils.LabelInput;
+import io.flutter.utils.OpenApiUtils;
 import io.flutter.utils.ZoomLevelSelector;
 import io.flutter.view.EmbeddedBrowser;
 import io.flutter.view.EmbeddedTab;
-import io.flutter.utils.LabelInput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import com.teamdev.jxbrowser.zoom.Zoom;
-import com.teamdev.jxbrowser.zoom.ZoomLevel;
-import com.intellij.ide.ui.UISettingsUtils;
 
-import javax.swing.*;
-import java.awt.*;
+import javax.swing.JComponent;
+import java.awt.Dimension;
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeoutException;
@@ -50,12 +53,25 @@ class EmbeddedJxBrowserTab implements EmbeddedTab {
   private Browser browser;
   private Zoom zoom;
   private final ZoomLevelSelector zoomSelector = new ZoomLevelSelector();
-  private static final @NotNull Logger LOG = Logger.getInstance(EmbeddedJxBrowserTab.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(EmbeddedJxBrowserTab.class);
 
   public EmbeddedJxBrowserTab(Engine engine) {
     this.engine = engine;
 
     try {
+      // Support copying text in the embedded browser to the clipboard. The following was copied from:
+      // https://teamdev.com/jxbrowser/docs/guides/clipboard/#necessary-permissions
+      this.engine.permissions().set(RequestPermissionCallback.class, (params, tell) -> {
+        var type = params.permissionType();
+        if (type == PermissionType.CLIPBOARD_READ_WRITE
+            || type == PermissionType.CLIPBOARD_SANITIZED_WRITE) {
+          tell.grant();
+        }
+        else {
+          tell.deny();
+        }
+      });
+
       this.browser = engine.newBrowser();
       this.zoom = this.browser.zoom();
       this.browser.settings().enableTransparentBackground();
@@ -68,7 +84,12 @@ class EmbeddedJxBrowserTab implements EmbeddedTab {
       // Skip using a transparent background if an exception is thrown.
     }
     catch (Exception | Error ex) {
-      LOG.info(ex);
+      if (FlutterSettings.getInstance().isFilePathLoggingEnabled()) {
+        LOG.info(ex);
+      }
+      else {
+        LOG.info("Exception when creating a new browser instance: " + ex.getMessage());
+      }
     }
   }
 
@@ -79,7 +100,19 @@ class EmbeddedJxBrowserTab implements EmbeddedTab {
 
   @Override
   public void close() {
-    this.browser.close();
+    OpenApiUtils.safeExecuteOnPooledThread(() -> {
+      try {
+        this.browser.close();
+      }
+      catch (Exception ex) {
+        if (FlutterSettings.getInstance().isFilePathLoggingEnabled()) {
+          LOG.info(ex);
+        }
+        else {
+          LOG.info("Exception when closing JX Browser instance: " + ex.getMessage());
+        }
+      }
+    });
   }
 
   @Override
@@ -129,6 +162,8 @@ public class EmbeddedJxBrowser extends EmbeddedBrowser {
     "Waiting for JxBrowser installation timed out. Restart your IDE to try again.";
   private static final String INSTALLATION_WAIT_FAILED = "The JxBrowser installation failed unexpectedly. Restart your IDE to try again.";
   private static final int INSTALLATION_WAIT_LIMIT_SECONDS = 30;
+
+  @NotNull
   private final AtomicReference<Engine> engineRef = new AtomicReference<>(null);
 
   private final Project project;
@@ -173,19 +208,22 @@ public class EmbeddedJxBrowser extends EmbeddedBrowser {
   }
 
   @Override
-  public @Nullable EmbeddedTab openEmbeddedTab(ContentManager contentManager) {
+  public @Nullable EmbeddedTab openEmbeddedTab(@NotNull ContentManager contentManager) {
     manageJxBrowserDownload(contentManager);
-    if (engineRef.get() == null) {
-      engineRef.compareAndSet(null, EmbeddedBrowserEngine.getInstance().getEngine());
-    }
+    // Do NOT initialize the JxBrowser Engine on the EDT.
+    // Historically, we tried to 'fallback' and construct the Engine here when it's null:
+    //   engineRef.compareAndSet(null, EmbeddedBrowserEngine.getInstance().getEngine());
+    // That path synchronously triggers Engine.newInstance(...) which blocks (CountDownLatch.await)
+    // and can freeze the Event Dispatch Thread (see #8394).
+    //
+    // Proceed only when the engine has been initialized by the async installation callback.
     final Engine engine = engineRef.get();
     if (engine == null) {
-      showMessageWithUrlLink(jxBrowserErrorMessage(), contentManager);
+      // Show an "installation in progress" UX instead of attempting synchronous engine creation.
+      handleJxBrowserInstallationInProgress(contentManager);
       return null;
     }
-    else {
-      return new EmbeddedJxBrowserTab(engine);
-    }
+    return new EmbeddedJxBrowserTab(engine);
   }
 
   private @NotNull String jxBrowserErrorMessage() {
@@ -212,7 +250,6 @@ public class EmbeddedJxBrowser extends EmbeddedBrowser {
   private @Nullable String jxBrowserErrorFromFailedReason(@Nullable InstallationFailedReason failedReason) {
     if (failedReason == null) return null;
     final FailureType failureType = failedReason.failureType;
-    if (failureType == null) return null;
     return switch (failureType) {
       case SYSTEM_INCOMPATIBLE -> "System is incompatible with JX Browser";
       case FILE_DOWNLOAD_FAILED -> "JX Browser file download failed";
@@ -224,7 +261,7 @@ public class EmbeddedJxBrowser extends EmbeddedBrowser {
     };
   }
 
-  private void manageJxBrowserDownload(ContentManager contentManager) {
+  private void manageJxBrowserDownload(@NotNull ContentManager contentManager) {
     final JxBrowserStatus jxBrowserStatus = jxBrowserManager.getStatus();
 
     if (jxBrowserStatus.equals(JxBrowserStatus.INSTALLED)) {
@@ -281,8 +318,8 @@ public class EmbeddedJxBrowser extends EmbeddedBrowser {
     }
   }
 
-  protected void handleJxBrowserInstallationFailed(ContentManager contentManager) {
-    final List<LabelInput> inputs = new ArrayList<>();
+  protected void handleJxBrowserInstallationFailed(@NotNull ContentManager contentManager) {
+    final List<LabelInput> inputs = new SmartList<>();
 
     final InstallationFailedReason latestFailureReason = jxBrowserManager.getLatestFailureReason();
 

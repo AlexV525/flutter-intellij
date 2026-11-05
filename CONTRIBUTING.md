@@ -28,7 +28,7 @@ We gladly accept contributions via GitHub pull requests!
 If you are new to coding IntelliJ plugins,
 here are a couple of links to get started:
 
-- [INTRODUCTION TO CREATING INTELLIJ IDEA PLUGINS](https://developerlife.com/2020/11/21/idea-plugin-example-intro/)
+- [INTRODUCTION TO CREATING INTELLIJ IDEA PLUGINS](https://developerlife.com/2020/11/20/idea-plugin-example-intro/)
 - [ADVANCED GUIDE TO CREATING INTELLIJ IDEA PLUGINS](https://developerlife.com/2021/03/13/ij-idea-plugin-advanced/)
 
 You must complete the [Contributor License Agreement](https://cla.developers.google.com/clas)
@@ -58,7 +58,6 @@ name and contact info to the [AUTHORS](AUTHORS) file.
 ## Environment set-up
 
 1. Install the latest [Java Development Kit](https://www.java.com/en/download/).
-    - The current Java Development Kit version is: **23**.
     - **[Googlers only]** Install Java from go/softwarecenter instead.
 
 2. Set your `JAVA_HOME` directory in the configuration file for your shell environment.
@@ -137,7 +136,7 @@ name and contact info to the [AUTHORS](AUTHORS) file.
     - Select "Platform Settings > SDKs"
     - Click the "+" sign at the top, click "Add New SDK (Alt+Insert)", then select "Add JDK from disk...".
     - Select your IntelliJ application (most likely under `Applications`) and from there, select the `Contents/jbr/Contents/Home` directory
-    - **[For macos]** You won't be able to select the `Contents` directory from Finder without right-clicking on the IntelliJ application, and selecting "Quick Look" from the dropdown that opens. From there, you can select the `Contents` directory.
+    - **[For macOS]** You won't be able to select the `Contents` directory from Finder without right-clicking on the IntelliJ application, and selecting "Quick Look" from the dropdown that opens. From there, you can select the `Contents` directory.
     - Change the name so that you can easily identify it, e.g. `IDEA JBR 21`.
     - When you are done, your settings should look something like:
     ```
@@ -150,7 +149,7 @@ name and contact info to the [AUTHORS](AUTHORS) file.
     - Click the "+" sign at the top, click "Add New SDK (Alt+Insert)", then select "Add IntelliJ Platform Plugin SDK...".
     - **[Note]** If you don't see this option, ensure you have the DevKit plugin installed.
     - Select your IntelliJ application (most likely under `Applications`) and from there, select the `Contents` directory
-    - **[For macos]** You won't be able to select the `Contents` directory from Finder without right-clicking on the IntelliJ application, and selecting "Quick Look" from the dropdown that opens. 
+    - **[For macOS]** You won't be able to select the `Contents` directory from Finder without right-clicking on the IntelliJ application, and selecting "Quick Look" from the dropdown that opens. 
     - Remember the generated name (probably `IntelliJ IDEA IU-231.8109.175`) or change to name to a format like this.
     - Change the **Internal Java Platform** to the JBR you added in step 2. (e.g. `IDEA JBR 21`).
     - When you are done, your settings should look something like:
@@ -233,6 +232,23 @@ name and contact info to the [AUTHORS](AUTHORS) file.
     - Expand `Edit configuration templates...` and verify that Flutter is present.
     - Click [+] and verify that Flutter is present.
 
+### Running against custom target IDEs
+
+To test or debug the plugin against a different IDE target (like IntelliJ IDEA Community or Ultimate) without changing the project's compilation target, you can use the custom `runTarget` Gradle task.
+
+Run it from the command line specifying the target IDE and version:
+```bash
+./gradlew runTarget -Pide=IntelliJ -PideV=2025.1
+```
+
+*   **`-Pide`**: Valid values are `AndroidStudio` (default), `IntelliJ` (Community), and `Ultimate`.
+*   **`-PideV`**: Any valid version string or build number for the selected IDE.
+
+To see a full list of available options and usage examples, run the task without any parameters:
+```bash
+./gradlew runTarget
+```
+
 ## Provision Tool
 
 This is not currently required. However, for debugging unit tests, it may be handy; please ignore for now.
@@ -291,6 +307,66 @@ To run unit tests on the command line:
 If you wanted to run a subset of the tests, you could do so this way.
 See the [Gradle docs](https://docs.gradle.org/current/userguide/java_testing.html)
 for more info about testing.
+
+## Plugin verification
+
+The [IntelliJ plugin verifier](https://github.com/JetBrains/intellij-plugin-verifier)
+checks the plugin against each supported IDE. To run it locally:
+
+```shell
+./gradlew verifyPlugin
+```
+
+### How verification is gated
+
+Two independent checks run in CI (the `VERIFY_BOT` branch of `tool/github.sh`),
+with a deliberate division of responsibility:
+
+1. **`verifyPlugin` decides what is severe.** Its `failureLevel` in
+   `build.gradle.kts` fails the build on compatibility problems, an invalid
+   plugin, and so on.
+2. **`check_verifier_baselines.sh` decides what is *new*.** It compares each
+   report against a committed baseline and reports anything not already known,
+   so a failure points at the specific issues that changed:
+
+   ```shell
+   ./tool/check_verifier_baselines.sh check
+   ```
+
+The script intentionally does **not** classify severity — that would duplicate
+`failureLevel` in a second place and the two would drift. Its contract is
+simply: anything new relative to the baseline is surfaced and fails.
+
+A few things worth knowing:
+
+- Baselines live in `tool/baseline/<IDE branch>/verifier-baseline.txt`, one per
+  platform branch (`252`, `253`, …). The branches are discovered from the
+  reports on disk, so verifying a branch with no committed baseline fails
+  loudly with "no baseline for IDE branch N" rather than silently skipping it.
+- Each baseline line is `<section><TAB><issue>`, which keeps the report section
+  visible in the diff so you can see at a glance what kind of finding changed.
+- Each baseline records the exact IDE build it was generated from, so when a
+  new EAP build introduces issues the report says so explicitly.
+- New issues are reported as job annotations and in the job summary, not just
+  buried in the log.
+
+> [!NOTE]
+> A new IDE build can introduce failures that no pull request caused. The
+> report names the IDE build and flags when it differs from the one the
+> baseline was recorded against, which usually makes this obvious.
+
+### Updating verifier baselines
+
+If new verification issues are found that match expected platform updates,
+update the baseline files and commit the result:
+
+```shell
+./tool/update_baselines.sh
+```
+
+> [!IMPORTANT]
+> Run this from the root directory of the repository. It runs the verifier once
+> per baselined platform version, so it takes a while.
 
 ## Adding platform sources
 

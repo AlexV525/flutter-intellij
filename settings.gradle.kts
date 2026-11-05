@@ -4,9 +4,4 @@
  * found in the LICENSE file.
  */
 
-pluginManagement {
-  repositories {
-    maven("https://oss.sonatype.org/content/repositories/snapshots/")
-    gradlePluginPortal()
-  }
-}
+rootProject.name = "flutter-intellij"

@@ -9,7 +9,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSyntaxException;
-import com.intellij.execution.process.*;
+import com.intellij.execution.process.ColoredProcessHandler;
+import com.intellij.execution.process.ProcessEvent;
+import com.intellij.execution.process.ProcessListener;
+import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.module.Module;
@@ -21,14 +24,12 @@ import com.intellij.openapi.roots.libraries.LibraryTablesRegistrar;
 import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.openapi.vcs.VcsException;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.util.ui.EDT;
 import com.jetbrains.lang.dart.sdk.DartSdk;
-import git4idea.config.GitExecutableManager;
 import io.flutter.FlutterBundle;
 import io.flutter.FlutterUtils;
 import io.flutter.dart.DartPlugin;
@@ -41,6 +42,7 @@ import io.flutter.run.common.RunMode;
 import io.flutter.run.test.TestFields;
 import io.flutter.settings.FlutterSettings;
 import io.flutter.utils.JsonUtils;
+import io.flutter.utils.ProcessAdapter;
 import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -49,7 +51,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 import static java.util.Arrays.asList;
 
@@ -107,7 +116,11 @@ public class FlutterSdk {
       return null;
     }
 
-    final String dartPath = dartSdk.getHomePath();
+    final String homePath = dartSdk.getHomePath();
+    if (homePath == null) {
+      return null;
+    }
+    final String dartPath = FileUtil.toSystemIndependentName(homePath);
     if (!dartPath.endsWith(DART_SDK_SUFFIX)) {
       return null;
     }
@@ -280,11 +293,6 @@ public class FlutterSdk {
   }
 
   @NotNull
-  public FlutterCommand flutterChannel() {
-    return new FlutterCommand(this, getHome(), FlutterCommand.Type.CHANNEL);
-  }
-
-  @NotNull
   public FlutterCommand flutterRun(@NotNull PubRoot root,
                                    @NotNull VirtualFile main,
                                    @NotNull FlutterDevice device,
@@ -295,7 +303,7 @@ public class FlutterSdk {
     final List<String> args = new ArrayList<>();
     args.add("--machine");
     FlutterSettings settings = FlutterSettings.getInstance();
-    if (settings != null && settings.isVerboseLogging()) {
+    if (settings.isVerboseLogging()) {
       args.add("--verbose");
     }
 
@@ -415,6 +423,25 @@ public class FlutterSdk {
     return new FlutterCommand(this, root.getRoot(), FlutterCommand.Type.TEST, args.toArray(new String[]{ }));
   }
 
+  @NotNull
+  public FlutterCommand widgetPreview(@NotNull PubRoot root, boolean isVerboseMode, @Nullable String dtdUri, @Nullable String devToolsUri) {
+    final List<String> args = new ArrayList<>();
+    args.add("start");
+    args.add("--web-server");
+    args.add("--machine");
+    if (isVerboseMode) {
+      args.add("--verbose");
+    }
+    if (dtdUri != null) {
+      args.add("--dtd-url=" + dtdUri);
+    }
+    if (devToolsUri != null) {
+      args.add("--devtools-server-address=" + devToolsUri);
+    }
+
+    return new FlutterCommand(this, root.getRoot(), FlutterCommand.Type.WIDGET_PREVIEW, args.toArray(new String[]{ }));
+  }
+
   /**
    * Runs flutter create and waits for it to finish.
    * <p>
@@ -444,7 +471,7 @@ public class FlutterSdk {
       }
     }
     catch (InterruptedException e) {
-      FlutterUtils.warn(LOG, e, true);
+      FlutterUtils.warn(LOG, "Interruption while waiting for createFiles", e, true);
       return null;
     }
 
@@ -548,36 +575,6 @@ public class FlutterSdk {
   @Nullable
   public String getDartSdkPath() {
     return FlutterSdkUtil.pathToDartSdk(getHomePath());
-  }
-
-  @Nullable
-  @NonNls
-  public FlutterSdkChannel queryFlutterChannel(boolean useCachedValue) {
-    if (useCachedValue) {
-      final String channel = cachedConfigValues.get("channel");
-      if (channel != null) {
-        return FlutterSdkChannel.fromText(channel);
-      }
-    }
-
-    final VirtualFile dir = LocalFileSystem.getInstance().findFileByPath(getHomePath());
-    assert dir != null;
-    String branch;
-    try {
-      branch = git4idea.light.LightGitUtilKt.getLocation(dir, GitExecutableManager.getInstance().getExecutable((Project)null));
-    }
-    catch (VcsException e) {
-      final String stdout = returnOutputOfQuery(flutterChannel());
-      if (stdout == null) {
-        branch = "unknown";
-      }
-      else {
-        branch = FlutterSdkChannel.parseChannel(stdout);
-      }
-    }
-
-    cachedConfigValues.put("channel", branch);
-    return FlutterSdkChannel.fromText(branch);
   }
 
   @NotNull

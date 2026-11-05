@@ -45,6 +45,9 @@ public class FlutterColorProvider implements ElementColorProvider {
 
     if (parent.getNode().getElementType() == DartTokenTypes.ARRAY_ACCESS_EXPRESSION) {
       // Colors.blue[200]
+      if (!refExpr.getFirstChild().getText().equals("Colors") && !refExpr.getFirstChild().getText().equals("CupertinoColors")) {
+        return null;
+      }
       if (name.equals(refExpr.getFirstChild().getText()) && refExpr.getChildren().length > 1) {
         // Avoid duplicate resolves.
         return null;
@@ -116,7 +119,7 @@ public class FlutterColorProvider implements ElementColorProvider {
       // name.equals(refExpr.getFirstChild().getText()) -> Colors.blue
       final PsiElement idNode = refExpr.getFirstChild();
       if (idNode == null) return null;
-      if (name.equals(idNode.getText())) {
+      if ((name.equals("Colors") || name.equals("CupertinoColors")) && name.equals(idNode.getText())) {
         final PsiElement selectorNode = refExpr.getLastChild();
         if (selectorNode == null) return null;
         final String code = AstBufferUtil.getTextSkippingWhitespaceComments(selectorNode.getNode());
@@ -190,7 +193,7 @@ public class FlutterColorProvider implements ElementColorProvider {
         return ExpressionParsingUtils.parseColor(code);
       }
     }
-    catch (StringIndexOutOfBoundsException e) {
+    catch (IndexOutOfBoundsException e) {
       // This is rare but possible in 2023.3, see https://github.com/flutter/flutter-intellij/issues/7285
       // from the call to AstBufferUtil.getTextSkippingWhitespaceComments()
       return null;

@@ -9,6 +9,7 @@ import com.intellij.execution.RunManager;
 import com.intellij.execution.RunnerAndConfigurationSettings;
 import com.intellij.facet.Facet;
 import com.intellij.facet.FacetManager;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.fileEditor.FileEditor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
@@ -17,7 +18,6 @@ import com.intellij.openapi.module.ModuleType;
 import com.intellij.openapi.module.ModuleTypeManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.serviceContainer.AlreadyDisposedException;
 import com.intellij.ui.EditorNotifications;
@@ -25,8 +25,6 @@ import com.jetbrains.lang.dart.sdk.DartSdk;
 import com.jetbrains.lang.dart.util.PubspecYamlUtil;
 import io.flutter.FlutterUtils;
 import io.flutter.actions.FlutterBuildActionGroup;
-import io.flutter.bazel.Workspace;
-import io.flutter.bazel.WorkspaceCache;
 import io.flutter.dart.DartPlugin;
 import io.flutter.pub.PubRoot;
 import io.flutter.pub.PubRootCache;
@@ -100,34 +98,6 @@ public class FlutterModuleUtils {
     return CollectionUtils.anyMatch(getModules(project), FlutterModuleUtils::isFlutterModule);
   }
 
-  /**
-   * Return the Flutter {@link Workspace} if there is at least one module that is determined to be a Flutter module by the workspace, and
-   * has the Dart SDK enabled module.
-   */
-  @Nullable
-  public static Workspace getFlutterBazelWorkspace(@Nullable Project project) {
-    if (project == null || project.isDisposed()) return null;
-
-    final Workspace workspace = WorkspaceCache.getInstance(project).get();
-    if (workspace == null) return null;
-
-    for (Module module : getModules(project)) {
-      if (DartPlugin.isDartSdkEnabled(module)) {
-        return workspace;
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Return true if the passed {@link Project} is a Bazel Flutter {@link Project}. If the {@link Workspace} is needed after this call,
-   * {@link #getFlutterBazelWorkspace(Project)} should be used.
-   */
-  public static boolean isFlutterBazelProject(@Nullable Project project) {
-    return getFlutterBazelWorkspace(project) != null;
-  }
-
   @Nullable
   public static VirtualFile findXcodeProjectFile(@NotNull Project project, @Nullable VirtualFile selectedFile) {
     if (selectedFile == null) {
@@ -198,7 +168,6 @@ public class FlutterModuleUtils {
     }
     return null;
   }
-
 
   public static @NotNull Module @NotNull [] getModules(@NotNull Project project) {
     // A disposed project has no modules.
@@ -342,7 +311,6 @@ public class FlutterModuleUtils {
   // Return true if there is a module with the same name as the project plus the Android suffix.
   public static boolean hasAndroidModule(@NotNull Project project) {
     for (PubRoot root : PubRoots.forProject(project)) {
-      assert root != null;
       String name = PubspecYamlUtil.getDartProjectName(root.getPubspec());
       String moduleName = name + "_android";
       for (Module module : FlutterModuleUtils.getModules(project)) {
@@ -373,18 +341,18 @@ public class FlutterModuleUtils {
     module.setModuleType(getModuleTypeIDForFlutter());
   }
 
-  public static void setFlutterModuleAndReload(@NotNull Module module, @NotNull Project project) {
+  public static void setFlutterModuleWithoutReload(@NotNull Module module, @NotNull Project project) {
     if (project.isDisposed()) return;
+    ApplicationManager.getApplication().invokeLater(() -> {
+      ApplicationManager.getApplication().runWriteAction(() -> setFlutterModuleType(module));
+      enableDartSDK(module);
+      project.save();
 
-    setFlutterModuleType(module);
-    enableDartSDK(module);
-    project.save();
-
-    EditorNotifications.getInstance(project).updateAllNotifications();
-    ProjectManager.getInstance().reloadProject(project);
+      EditorNotifications.getInstance(project).updateAllNotifications();
+    });
   }
 
-  public static void enableDartSDK(@NotNull Module module) {
+  public static void enableDartSDK(final @NotNull Module module) {
     if (FlutterSdk.getFlutterSdk(module.getProject()) != null) {
       return;
     }
@@ -418,10 +386,18 @@ public class FlutterModuleUtils {
       if (dartSdkPath == null) {
         return; // Not cached. TODO call flutterSdk.sync() here?
       }
-      OpenApiUtils.safeRunWriteAction(() -> {
-        DartPlugin.ensureDartSdkConfigured(module.getProject(), dartSdkPath);
-        DartPlugin.enableDartSdk(module);
-      });
+
+      // Wrap the write action in a thread-safe way
+      // See https://github.com/flutter/flutter-intellij/issues/8480
+      final Application application = ApplicationManager.getApplication();
+      if (application != null) {
+        application.invokeLater(() -> {
+          application.runWriteAction(() -> {
+            DartPlugin.ensureDartSdkConfigured(module.getProject(), dartSdkPath);
+            DartPlugin.enableDartSdk(module);
+          });
+        });
+      }
     }
   }
 }

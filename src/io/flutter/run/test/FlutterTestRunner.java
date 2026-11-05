@@ -14,7 +14,10 @@ import com.intellij.execution.ExecutionResult;
 import com.intellij.execution.configurations.RunProfile;
 import com.intellij.execution.configurations.RunProfileState;
 import com.intellij.execution.executors.DefaultDebugExecutor;
-import com.intellij.execution.process.*;
+import com.intellij.execution.process.ProcessEvent;
+import com.intellij.execution.process.ProcessHandler;
+import com.intellij.execution.process.ProcessListener;
+import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.execution.runners.ExecutionEnvironment;
 import com.intellij.execution.runners.GenericProgramRunner;
 import com.intellij.execution.runners.RunContentBuilder;
@@ -30,12 +33,15 @@ import com.intellij.xdebugger.XDebugSession;
 import com.intellij.xdebugger.XDebuggerManager;
 import com.jetbrains.lang.dart.util.DartUrlResolver;
 import io.flutter.FlutterUtils;
+import io.flutter.run.FlutterDebugSessionUtils;
 import io.flutter.ObservatoryConnector;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterPositionMapper;
 import io.flutter.run.common.CommonTestConfigUtils;
 import io.flutter.sdk.FlutterSdk;
 import io.flutter.settings.FlutterSettings;
 import io.flutter.utils.JsonUtils;
+import io.flutter.utils.ProcessAdapter;
 import io.flutter.utils.StdoutJsonParser;
 import io.flutter.utils.VmServiceListenerAdapter;
 import io.flutter.vmService.VmServiceConsumers;
@@ -200,20 +206,17 @@ public class FlutterTestRunner extends GenericProgramRunner {
 
     // Set up source file mapping.
     final DartUrlResolver resolver = DartUrlResolver.getInstance(env.getProject(), launcher.getTestFileOrDir());
-    final FlutterPositionMapper.Analyzer analyzer = FlutterPositionMapper.Analyzer.create(env.getProject(), launcher.getTestFileOrDir());
-    final FlutterPositionMapper mapper = new FlutterPositionMapper(env.getProject(), launcher.getPubRoot().getRoot(), resolver, analyzer);
+    final FlutterPositionMapper mapper = new FlutterPositionMapper(env.getProject(), launcher.getPubRoot().getRoot(), resolver);
 
     // Create the debug session.
     final XDebuggerManager manager = XDebuggerManager.getInstance(env.getProject());
-    final XDebugSession session = manager.startSession(env, new XDebugProcessStarter() {
+    return FlutterDebugSessionUtils.startSessionAndGetDescriptor(manager, env, new XDebugProcessStarter() {
       @Override
       @NotNull
       public XDebugProcess start(@NotNull final XDebugSession session) {
         return new TestDebugProcess(env, session, executionResult, resolver, connector, mapper);
       }
-    });
-
-    return session.getRunContentDescriptor();
+    }, false);
   }
 
   /**
@@ -293,7 +296,7 @@ public class FlutterTestRunner extends GenericProgramRunner {
         obj = elem.getAsJsonObject();
       }
       catch (JsonSyntaxException e) {
-        FlutterUtils.warn(LOG, "Unable to parse JSON from Flutter test", e);
+        FlutterUtils.warn(LOG, "Unable to parse JSON from Flutter test", e, true);
         return;
       }
 
@@ -331,7 +334,8 @@ public class FlutterTestRunner extends GenericProgramRunner {
 
         if (primVmServiceUri != null) {
           observatoryUri = primVmServiceUri.getAsString();
-        } else {
+        }
+        else {
           final JsonPrimitive primObservatoryUri = params.getAsJsonPrimitive("observatoryUri");
 
           if (primObservatoryUri != null) {
@@ -342,5 +346,5 @@ public class FlutterTestRunner extends GenericProgramRunner {
     }
   }
 
-  private static final @NotNull Logger LOG = Logger.getInstance(FlutterTestRunner.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(FlutterTestRunner.class);
 }

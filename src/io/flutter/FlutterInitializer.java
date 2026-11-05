@@ -29,17 +29,14 @@ import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.concurrency.AppExecutorUtil;
 import com.intellij.util.messages.MessageBusConnection;
-import com.jetbrains.lang.dart.ide.toolingDaemon.DartToolingDaemonService;
-import de.roderick.weberknecht.WebSocketException;
 import io.flutter.android.IntelliJAndroidSdk;
-import io.flutter.bazel.WorkspaceCache;
 import io.flutter.dart.DtdUtils;
-import io.flutter.dart.FlutterDartAnalysisServer;
 import io.flutter.devtools.DevToolsExtensionsViewFactory;
 import io.flutter.devtools.DevToolsUtils;
 import io.flutter.devtools.RemainingDevToolsViewFactory;
 import io.flutter.editor.FlutterSaveActionsManager;
 import io.flutter.logging.FlutterConsoleLogManager;
+import io.flutter.logging.PluginLogger;
 import io.flutter.module.FlutterModuleBuilder;
 import io.flutter.pub.PubRoot;
 import io.flutter.pub.PubRoots;
@@ -59,8 +56,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -68,8 +64,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * Runs actions after the project has started up and the index is up to date.
  *
  * @see ProjectOpenActivity for actions that run earlier.
- * @see io.flutter.project.FlutterProjectOpenProcessor for additional actions that
- * may run when a project is being imported.
  */
 public class FlutterInitializer extends FlutterProjectActivity {
   private boolean toolWindowsInitialized = false;
@@ -78,8 +72,18 @@ public class FlutterInitializer extends FlutterProjectActivity {
 
   private @NotNull AtomicLong lastScheduledThemeChangeTime = new AtomicLong();
 
+  // Shared scheduler to avoid creating/closing executors on EDT
+  @NotNull
+  private final ScheduledExecutorService scheduler = AppExecutorUtil.getAppScheduledExecutorService();
+
   @Override
   public void executeProjectStartup(@NotNull Project project) {
+    PluginLogger.initLogger();
+
+    // This sets the correct log level and listens for future changes.
+    PluginLogger.updateLogLevel();
+    FlutterSettings.getInstance().addListener(PluginLogger::updateLogLevel);
+
     log().info("Executing Flutter plugin startup for project: " + project.getName());
     // Disable the 'Migrate Project to Gradle' notification.
     FlutterUtils.disableGradleProjectMigrationNotification(project);
@@ -93,7 +97,6 @@ public class FlutterInitializer extends FlutterProjectActivity {
     // If the project declares a Flutter dependency, do some extra initialization.
     boolean hasFlutterModule = false;
 
-
     var roots = new ArrayList<PubRoot>();
 
     for (Module module : OpenApiUtils.getModules(project)) {
@@ -106,8 +109,19 @@ public class FlutterInitializer extends FlutterProjectActivity {
       }
 
       log().info("Flutter module has been found for project: " + project.getName());
-      // Ensure SDKs are configured; needed for clean module import.
-      FlutterModuleUtils.enableDartSDK(module);
+
+      // Ensure Flutter project configuration is applied for projects that may have been
+      // opened without a .idea directory. Previously this was handled by FlutterProjectOpenProcessor,
+      // but that processor silently failed when no delegate processor could open the project.
+      // Instead, we let the platform open the project normally and apply our configuration here.
+      // See https://github.com/flutter/flutter-intellij/issues/8661 (Android Studio equivalent)
+      if (!FlutterModuleUtils.isFlutterModule(module)) {
+        log().info("Fixing Flutter module configuration for " + module.getName());
+        FlutterModuleUtils.setFlutterModuleWithoutReload(module, project);
+      } else {
+        // Ensure SDKs are configured; needed for clean module import.
+        FlutterModuleUtils.enableDartSDK(module);
+      }
 
       for (PubRoot root : PubRoots.forModule(module)) {
         // Set Android SDK.
@@ -135,7 +149,7 @@ public class FlutterInitializer extends FlutterProjectActivity {
         }
         return null;
       })
-      .expireWith(FlutterDartAnalysisServer.getInstance(project))
+      .expireWith(FlutterProjectDisposable.getInstance(project))
       .finishOnUiThread(ModalityState.defaultModalityState(), result -> {
         edtInitialization(finalHasFlutterModule, project);
       })
@@ -146,7 +160,7 @@ public class FlutterInitializer extends FlutterProjectActivity {
    * Initialization that needs to complete on the EDT thread.
    */
   private void edtInitialization(boolean hasFlutterModule, @NotNull Project project) {
-    if (hasFlutterModule || WorkspaceCache.getInstance(project).isBazel()) {
+    if (hasFlutterModule) {
       initializeToolWindows(project);
     }
     else {
@@ -253,57 +267,61 @@ public class FlutterInitializer extends FlutterProjectActivity {
     lastScheduledThemeChangeTime.set(requestTime);
 
     // Schedule event to be sent in a second if nothing more recent has come in.
-    try (var executor = Executors.newSingleThreadScheduledExecutor()) {
-      executor.schedule(() -> {
-        if (lastScheduledThemeChangeTime.get() != requestTime) {
-          // A more recent request has been set, so drop this request.
-          return;
-        }
+    scheduler.schedule(() -> {
+      if (lastScheduledThemeChangeTime.get() != requestTime) {
+        // A more recent request has been set, so drop this request.
+        return;
+      }
 
-        final JsonObject params = new JsonObject();
-        params.addProperty("eventKind", "themeChanged");
-        params.addProperty("streamId", "Editor");
+      final JsonObject params = new JsonObject();
+      params.addProperty("eventKind", "themeChanged");
+      params.addProperty("streamId", "Editor");
 
-        final JsonObject themeData = new JsonObject();
-        final DevToolsUtils utils = new DevToolsUtils();
-        themeData.addProperty("isDarkMode", Boolean.FALSE.equals(utils.getIsBackgroundBright()));
-        themeData.addProperty("backgroundColor", utils.getColorHexCode());
-        themeData.addProperty("fontSize", utils.getFontSize().intValue());
+      final JsonObject themeData = new JsonObject();
+      final DevToolsUtils utils = new DevToolsUtils();
+      themeData.addProperty("isDarkMode", Boolean.FALSE.equals(utils.getIsBackgroundBright()));
+      themeData.addProperty("backgroundColor", utils.getColorHexCode());
+      themeData.addProperty("fontSize", utils.getFontSize().intValue());
 
-        final JsonObject eventData = new JsonObject();
-        eventData.add("theme", themeData);
-        params.add("eventData", eventData);
+      final JsonObject eventData = new JsonObject();
+      eventData.add("theme", themeData);
+      params.add("eventData", eventData);
 
-        try {
-          final DtdUtils dtdUtils = new DtdUtils();
-          final DartToolingDaemonService dtdService = dtdUtils.readyDtdService(project).get();
+      final DtdUtils dtdUtils = new DtdUtils();
+      dtdUtils.readyDtdService(project)
+        .thenAccept(dtdService -> {
           if (dtdService == null) {
-            log().error("Unable to send theme changed event because DTD service is null");
+            log().warn("Unable to send theme changed event because DTD service is null");
             return;
           }
-
-          dtdService.sendRequest("postEvent", params, false, object -> {
-                                   JsonObject result = object.getAsJsonObject("result");
-                                   if (result == null) {
-                                     log().error("Theme changed event returned null result");
-                                     return;
-                                   }
-                                   JsonPrimitive type = result.getAsJsonPrimitive("type");
-                                   if (type == null) {
-                                     log().error("Theme changed event result type is null");
-                                     return;
-                                   }
-                                   if (!"Success".equals(type.getAsString())) {
-                                     log().error("Theme changed event result: " + type.getAsString());
-                                   }
-                                 }
-          );
-        }
-        catch (WebSocketException | InterruptedException | ExecutionException e) {
-          log().error("Unable to send theme changed event", e);
-        }
-      }, 1, TimeUnit.SECONDS);
-    }
+          try {
+            dtdService.sendRequest("postEvent", params, false, object -> {
+              JsonObject result = object.getAsJsonObject("result");
+              if (result == null) {
+                log().error("Theme changed event returned null result");
+                return;
+              }
+              JsonPrimitive type = result.getAsJsonPrimitive("type");
+              if (type == null) {
+                log().error("Theme changed event result type is null");
+                return;
+              }
+              if (!"Success".equals(type.getAsString())) {
+                log().error("Theme changed event result: " + type.getAsString());
+              }
+            });
+          }
+          // The Dart plugin changed its checked WebSocket exception type when it replaced
+          // Weberknecht. Catching the common base type keeps this call compatible with both APIs.
+          catch (Exception e) {
+            log().error("Unable to send theme changed event", e);
+          }
+        })
+        .exceptionally(e -> {
+          log().debug("DTD not ready; skipping themeChanged event", e);
+          return null;
+        });
+    }, 1, TimeUnit.SECONDS);
   }
 
   private void checkSdkVersionNotification(@NotNull Project project) {
@@ -314,7 +332,7 @@ public class FlutterInitializer extends FlutterProjectActivity {
     // See FlutterSdkVersion.MIN_SDK_SUPPORTED.
     if (version.isValid() && !version.isSDKSupported()) {
       final FlutterSettings settings = FlutterSettings.getInstance();
-      if (settings == null || settings.isSdkVersionOutdatedWarningAcknowledged(version.getVersionText(), false)) return;
+      if (settings.isSdkVersionOutdatedWarningAcknowledged(version.getVersionText(), false)) return;
       OpenApiUtils.safeInvokeLater(() -> {
         final Notification notification = new Notification(FlutterMessages.FLUTTER_NOTIFICATION_GROUP_ID,
                                                            "Flutter SDK requires update",
@@ -339,7 +357,7 @@ public class FlutterInitializer extends FlutterProjectActivity {
     // See FlutterSdkVersion.MIN_SDK_WITHOUT_SUNSET_WARNING.
     if (version.isValid() && version.isSDKAboutToSunset()) {
       final FlutterSettings settings = FlutterSettings.getInstance();
-      if (settings == null || settings.isSdkVersionOutdatedWarningAcknowledged(version.getVersionText(), true)) return;
+      if (settings.isSdkVersionOutdatedWarningAcknowledged(version.getVersionText(), true)) return;
 
       OpenApiUtils.safeInvokeLater(() -> {
         final Notification notification = new Notification(FlutterMessages.FLUTTER_NOTIFICATION_GROUP_ID,

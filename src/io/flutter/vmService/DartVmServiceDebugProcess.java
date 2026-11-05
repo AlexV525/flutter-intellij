@@ -19,11 +19,13 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.openapi.wm.WindowManager;
 import com.intellij.testFramework.LightVirtualFile;
-import com.intellij.util.BitUtil;
 import com.intellij.util.TimeoutUtil;
-import com.intellij.xdebugger.*;
+import com.intellij.xdebugger.XDebugProcess;
+import com.intellij.xdebugger.XDebugSession;
+import com.intellij.xdebugger.XDebugSessionListener;
+import com.intellij.xdebugger.XDebuggerBundle;
+import com.intellij.xdebugger.XSourcePosition;
 import com.intellij.xdebugger.breakpoints.XBreakpointHandler;
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider;
 import com.intellij.xdebugger.evaluation.XDebuggerEvaluator;
@@ -35,6 +37,7 @@ import com.jetbrains.lang.dart.util.DartUrlResolver;
 import io.flutter.FlutterBundle;
 import io.flutter.FlutterUtils;
 import io.flutter.ObservatoryConnector;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterLaunchMode;
 import io.flutter.utils.OpenApiUtils;
 import io.flutter.vmService.frame.DartVmServiceEvaluator;
@@ -43,23 +46,37 @@ import io.flutter.vmService.frame.DartVmServiceSuspendContext;
 import org.dartlang.vm.service.VmService;
 import org.dartlang.vm.service.consumer.GetObjectConsumer;
 import org.dartlang.vm.service.consumer.VMConsumer;
-import org.dartlang.vm.service.element.*;
+import org.dartlang.vm.service.element.ElementList;
 import org.dartlang.vm.service.element.Event;
+import org.dartlang.vm.service.element.EventKind;
+import org.dartlang.vm.service.element.ExceptionPauseMode;
+import org.dartlang.vm.service.element.Isolate;
+import org.dartlang.vm.service.element.IsolateRef;
+import org.dartlang.vm.service.element.LibraryRef;
+import org.dartlang.vm.service.element.Obj;
+import org.dartlang.vm.service.element.RPCError;
+import org.dartlang.vm.service.element.Script;
+import org.dartlang.vm.service.element.ScriptRef;
+import org.dartlang.vm.service.element.Sentinel;
+import org.dartlang.vm.service.element.StepOption;
+import org.dartlang.vm.service.element.VM;
 import org.dartlang.vm.service.logging.Logging;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
-import java.awt.*;
-import java.awt.event.WindowEvent;
-import java.awt.event.WindowListener;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 public abstract class DartVmServiceDebugProcess extends XDebugProcess {
-  private static final @NotNull Logger LOG = Logger.getInstance(DartVmServiceDebugProcess.class.getName());
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(DartVmServiceDebugProcess.class);
 
   @NotNull private final ExecutionResult myExecutionResult;
   @NotNull private final DartUrlResolver myDartUrlResolver;
@@ -96,23 +113,6 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
     };
 
     session.setPauseActionSupported(true);
-
-    session.addSessionListener(new XDebugSessionListener() {
-      @Override
-      public void sessionPaused() {
-        // This can be removed if XFramesView starts popping the project window to the top of the z-axis stack.
-        final Project project = getSession().getProject();
-        focusProject(project);
-        stackFrameChanged();
-      }
-
-      @Override
-      public void stackFrameChanged() {
-        final XStackFrame stackFrame = getSession().getCurrentStackFrame();
-        myLatestCurrentIsolateId =
-          stackFrame instanceof DartVmServiceStackFrame ? ((DartVmServiceStackFrame)stackFrame).getIsolateId() : null;
-      }
-    });
 
     this.executionEnvironment = executionEnvironment;
     this.mapper = mapper;
@@ -185,8 +185,11 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
 
       @Override
       public void logError(final String message, final Throwable exception) {
-        if (!getVmConnected() || getSession() == null) {
+        if (!getVmConnected()) {
           return;
+        }
+        else {
+          getSession();
         }
         if (message != null) {
           getSession().getConsoleView().print(message.trim() + "\n", ConsoleViewContentType.ERROR_OUTPUT);
@@ -423,8 +426,7 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
 
   @Nullable
   public XSourcePosition getSourcePosition(@NotNull final String isolateId, @NotNull final ScriptRef scriptRef, int tokenPos) {
-    CompletableFuture<String> fileFuture = myVmServiceWrapper.findResolvedFile(isolateId, scriptRef.getUri());
-    return mapper.getSourcePosition(isolateId, scriptRef, tokenPos, fileFuture);
+    return mapper.getSourcePosition(isolateId, scriptRef, tokenPos);
   }
 
   @Nullable
@@ -511,7 +513,7 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
                 else if (eventKind == EventKind.Resume) {
                   // Currently true if we got here via 'flutter attach'
                   OpenApiUtils.safeInvokeLater(() -> {
-                    myVmServiceWrapper.attachIsolate(isolateRef, isolate);
+                    myVmServiceWrapper.attachIsolate(isolateRef);
                   });
                 }
               }
@@ -585,73 +587,6 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
     return myVmConnected;
   }
 
-  private static boolean isDartPatchUri(@NotNull final String uri) {
-    // dart:_builtin or dart:core-patch/core_patch.dart
-    return uri.startsWith("dart:_") || uri.startsWith("dart:") && uri.contains("-patch/");
-  }
-
-  private static void focusProject(@NotNull Project project) {
-    final WindowManager windowManager = WindowManager.getInstance();
-    if (windowManager == null) {
-      return;
-    }
-
-    final JFrame projectFrame = windowManager.getFrame(project);
-    if (projectFrame == null) {
-      return;
-    }
-
-    final int frameState = projectFrame.getExtendedState();
-
-    if (BitUtil.isSet(frameState, java.awt.Frame.ICONIFIED)) {
-      // restore the frame if it is minimized
-      projectFrame.setExtendedState(frameState ^ java.awt.Frame.ICONIFIED);
-      projectFrame.toFront();
-    }
-    else {
-      final JFrame anchor = new JFrame();
-      anchor.setType(Window.Type.UTILITY);
-      anchor.setUndecorated(true);
-      anchor.setSize(0, 0);
-      anchor.addWindowListener(new WindowListener() {
-        @Override
-        public void windowOpened(WindowEvent e) {
-        }
-
-        @Override
-        public void windowClosing(WindowEvent e) {
-        }
-
-        @Override
-        public void windowClosed(WindowEvent e) {
-        }
-
-        @Override
-        public void windowIconified(WindowEvent e) {
-        }
-
-        @Override
-        public void windowDeiconified(WindowEvent e) {
-        }
-
-        @Override
-        public void windowActivated(WindowEvent e) {
-          if (projectFrame.isDisplayable()) {
-            projectFrame.setVisible(true);
-          }
-          anchor.dispose();
-        }
-
-        @Override
-        public void windowDeactivated(WindowEvent e) {
-        }
-      });
-      anchor.pack();
-      anchor.setVisible(true);
-      anchor.toFront();
-    }
-  }
-
   public interface PositionMapper {
     void onConnect(ScriptProvider provider, String remoteBaseUrl);
 
@@ -672,7 +607,7 @@ public abstract class DartVmServiceDebugProcess extends XDebugProcess {
     /**
      * Returns the local position (to display to the user) corresponding to a token position in Observatory.
      */
-    XSourcePosition getSourcePosition(String isolateId, ScriptRef scriptRef, int tokenPos, CompletableFuture<String> fileFuture);
+    XSourcePosition getSourcePosition(String isolateId, ScriptRef scriptRef, int tokenPos);
 
     /**
      * Returns the local position (to display to the user) corresponding to a token position in Observatory.

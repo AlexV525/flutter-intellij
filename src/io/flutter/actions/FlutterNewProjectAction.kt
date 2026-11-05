@@ -14,13 +14,11 @@ import com.intellij.openapi.application.EDT
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.roots.ui.configuration.ModulesProvider
 import com.intellij.openapi.wm.impl.welcomeScreen.NewWelcomeScreen
+import com.jetbrains.lang.dart.analytics.Analytics
+import com.jetbrains.lang.dart.analytics.AnalyticsData
 import io.flutter.FlutterBundle
 import io.flutter.FlutterUtils
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 
 /**
  * This classes was re-implemented with Kotlin from FlutterNewProjectAction.java to resolve the New Flutter Project action from hanging,
@@ -28,7 +26,7 @@ import kotlinx.coroutines.withContext
  *
  * See https://github.com/JetBrains/intellij-community/blob/master/java/idea-ui/src/com/intellij/ide/impl/NewProjectUtil.kt
  */
-class FlutterNewProjectAction : AnAction(FlutterBundle.message("action.new.project.title")), DumbAware {
+class FlutterNewProjectAction : AnAction(), DumbAware {
   override fun update(e: AnActionEvent) {
     if (NewWelcomeScreen.isNewWelcomeScreen(e)) {
       e.presentation.setText(FlutterBundle.message("welcome.new.project.compact"))
@@ -48,6 +46,7 @@ class FlutterNewProjectAction : AnAction(FlutterBundle.message("action.new.proje
       createNewProjectAsync(wizard)
     }
 
+    Analytics.report(AnalyticsData.forAction(this, e));
   }
 
   override fun getActionUpdateThread() = ActionUpdateThread.BGT

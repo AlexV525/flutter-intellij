@@ -9,7 +9,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.intellij.concurrency.JobScheduler;
 import com.intellij.execution.ExecutionException;
-import com.intellij.ide.ActivityTracker;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationInfo;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -19,8 +19,7 @@ import com.intellij.openapi.roots.ex.ProjectRootManagerEx;
 import com.intellij.openapi.util.Disposer;
 import io.flutter.FlutterMessages;
 import io.flutter.FlutterUtils;
-import io.flutter.bazel.WorkspaceCache;
-import io.flutter.dart.FlutterDartAnalysisServer;
+import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterDevice;
 import io.flutter.sdk.AndroidEmulatorManager;
 import io.flutter.sdk.FlutterSdkManager;
@@ -28,7 +27,7 @@ import io.flutter.utils.Refreshable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
+import javax.swing.SwingUtilities;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -40,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Provides the list of available devices (mobile phones or emulators) that appears in the dropdown menu.
  */
-public class DeviceService {
+public class DeviceService implements Disposable {
   @NotNull private final Project project;
 
   /**
@@ -64,7 +63,7 @@ public class DeviceService {
   private DeviceService(@NotNull final Project project) {
     this.project = project;
 
-    deviceDaemon.setDisposeParent(FlutterDartAnalysisServer.getInstance(project));
+    deviceDaemon.setDisposeParent(this);
     deviceDaemon.subscribe(this::refreshDeviceSelection);
     refreshDeviceDaemon();
 
@@ -80,15 +79,16 @@ public class DeviceService {
         refreshDeviceDaemon();
       }
     };
-    FlutterSdkManager.getInstance(project).addListener(sdkListener);
-    Disposer.register(FlutterDartAnalysisServer.getInstance(project),
-                      () -> FlutterSdkManager.getInstance(project).removeListener(sdkListener));
-
-    // Watch for Bazel workspace changes.
-    WorkspaceCache.getInstance(project).subscribe(this::refreshDeviceDaemon);
+    final FlutterSdkManager sdkManager = FlutterSdkManager.getInstance(project);
+    sdkManager.addListener(sdkListener);
+    Disposer.register(this, () -> sdkManager.removeListener(sdkListener));
 
     // Watch for Java SDK changes. (Used to get the value of ANDROID_HOME.)
     ProjectRootManagerEx.getInstanceEx(project).addProjectJdkListener(this::refreshDeviceDaemon);
+  }
+
+  @Override
+  public void dispose() {
   }
 
   /**
@@ -173,7 +173,7 @@ public class DeviceService {
           listener.run();
         }
         catch (Exception e) {
-          FlutterUtils.warn(LOG, "DeviceDaemon listener threw an exception", e);
+          FlutterUtils.warn(LOG, "DeviceDaemon listener threw an exception", e, true);
         }
       }
     });
@@ -190,7 +190,6 @@ public class DeviceService {
       if (project.isDisposed()) return;
       deviceDaemon.refresh(this::chooseNextDaemon);
       refreshInProgress = false;
-      ActivityTracker.getInstance().inc();
     });
   }
 
@@ -258,7 +257,7 @@ public class DeviceService {
       return nextCommand.start(request::isCancelled, this::refreshDeviceSelection, this::daemonStopped);
     }
     catch (ExecutionException executionException) {
-      LOG.info("Error starting up the Flutter device daemon", executionException);
+      FlutterUtils.info(LOG, "Error starting up the Flutter device daemon", executionException, true);
 
       // Couldn't start a new instance; don't shut down any previous instance.
       return previous;
@@ -284,5 +283,5 @@ public class DeviceService {
 
   public enum State {INACTIVE, LOADING, READY}
 
-  private static final @NotNull Logger LOG = Logger.getInstance(DeviceService.class);
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(DeviceService.class);
 }

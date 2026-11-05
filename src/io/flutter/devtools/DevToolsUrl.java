@@ -5,7 +5,9 @@
  */
 package io.flutter.devtools;
 
-import io.flutter.bazel.WorkspaceCache;
+import com.intellij.openapi.application.ApplicationInfo;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.util.text.StringUtil;
 import io.flutter.sdk.FlutterSdkUtil;
 import io.flutter.sdk.FlutterSdkVersion;
 import org.jetbrains.annotations.NotNull;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class DevToolsUrl {
+  public static final String UNKNOWN_INTELLIJ_NAME = "IntelliJ - Unknown";
   private String devToolsHost;
   private int devToolsPort;
   public String vmServiceUri;
@@ -33,6 +36,7 @@ public class DevToolsUrl {
   private final boolean canUseMultiEmbed;
 
   public final DevToolsIdeFeature ideFeature;
+  private final String ideName;
 
   @NotNull private final DevToolsUtils devToolsUtils;
 
@@ -47,8 +51,8 @@ public class DevToolsUrl {
     private String hide;
 
     private @Nullable FlutterSdkVersion flutterSdkVersion;
-    private WorkspaceCache workspaceCache;
     private DevToolsIdeFeature ideFeature;
+    private String ideName;
 
     private DevToolsUtils devToolsUtils;
 
@@ -112,12 +116,6 @@ public class DevToolsUrl {
     }
 
     @NotNull
-    public Builder setWorkspaceCache(WorkspaceCache workspaceCache) {
-      this.workspaceCache = workspaceCache;
-      return this;
-    }
-
-    @NotNull
     public Builder setIdeFeature(DevToolsIdeFeature ideFeature) {
       this.ideFeature = ideFeature;
       return this;
@@ -126,6 +124,12 @@ public class DevToolsUrl {
     @NotNull
     public Builder setFlutterSdkUtil(FlutterSdkUtil flutterSdkUtil) {
       this.flutterSdkUtil = flutterSdkUtil;
+      return this;
+    }
+
+    @NotNull
+    public Builder setIdeName(String ideName) {
+      this.ideName = ideName;
       return this;
     }
 
@@ -160,11 +164,9 @@ public class DevToolsUrl {
     this.flutterSdkVersion = builder.flutterSdkVersion;
     this.ideFeature = builder.ideFeature;
     this.sdkUtil = builder.flutterSdkUtil;
+    this.ideName = builder.ideName != null ? builder.ideName : getIdeName();
 
-    if (builder.workspaceCache != null && builder.workspaceCache.isBazel()) {
-      this.canUseMultiEmbed = true;
-    }
-    else if (flutterSdkVersion != null) {
+    if (flutterSdkVersion != null) {
       this.canUseMultiEmbed = flutterSdkVersion.canUseDevToolsMultiEmbed();
     }
     else {
@@ -178,7 +180,10 @@ public class DevToolsUrl {
     final List<String> params = new ArrayList<>();
 
     String ideValue = sdkUtil.getFlutterHostEnvValue();
-    params.add("ide=" + (ideValue == null ? "IntelliJPluginUnknown" : ideValue));
+    String ideParamValue = ideValue == null ? UNKNOWN_INTELLIJ_NAME : ideValue;
+    params.add("ide=" + URLEncoder.encode(ideParamValue, StandardCharsets.UTF_8));
+    params.add("dashTool=intellij-plugins");
+    params.add("dashIdeName=" + URLEncoder.encode(this.ideName, StandardCharsets.UTF_8));
     if (colorHexCode != null) {
       params.add("backgroundColor=" + colorHexCode);
     }
@@ -211,16 +216,32 @@ public class DevToolsUrl {
     if (widgetId != null) {
       params.add("inspectorRef=" + widgetId);
     }
-    return "http://" + devToolsHost + ":" + devToolsPort + "/" + (page != null ? page : "") + "?" + String.join("&", params);
+    return "http://" + devToolsHost + ":" + devToolsPort + "/" + (page != null ? page : "") + "?"
+        + StringUtil.join(params, "&");
   }
 
-  public void maybeUpdateColor() {
+  private @NotNull String getIdeName() {
+    if (ApplicationManager.getApplication() == null) {
+      return UNKNOWN_INTELLIJ_NAME;
+    }
+    ApplicationInfo appInfo = ApplicationInfo.getInstance();
+    if (appInfo != null) {
+      String versionName = appInfo.getVersionName();
+      if (versionName != null) {
+        return versionName;
+      }
+    }
+    return UNKNOWN_INTELLIJ_NAME;
+  }
+
+  public boolean maybeUpdateColor() {
     final String newColor = devToolsUtils.getColorHexCode();
     if (Objects.equals(colorHexCode, newColor)) {
-      return;
+      return false;
     }
 
     colorHexCode = newColor;
     isBright = devToolsUtils.getIsBackgroundBright();
+    return true;
   }
 }

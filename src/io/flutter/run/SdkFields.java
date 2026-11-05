@@ -39,7 +39,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Fields used when launching an app using the Flutter SDK (non-bazel).
+ * Fields used when launching an app using the Flutter SDK.
  */
 public class SdkFields {
   private static final @NotNull Logger LOG = PluginLogger.createLogger(SdkFields.class);
@@ -93,7 +93,8 @@ public class SdkFields {
   public String[] getAdditionalArgsParsed() {
     if (hasAdditionalArgs()) {
       assert additionalArgs != null;
-      return ParametersListUtil.parse(additionalArgs, false, true, true).toArray(new String[0]);
+      return ParametersListUtil.parse(additionalArgs, false, false, true).stream().filter(s -> !s.isEmpty())
+        .toArray(String[]::new);
     }
 
     return new String[0];
@@ -115,7 +116,8 @@ public class SdkFields {
   public String[] getAttachArgsParsed() {
     if (hasAttachArgs()) {
       assert attachArgs != null;
-      return ParametersListUtil.parse(attachArgs, false, true, true).toArray(new String[0]);
+      return ParametersListUtil.parse(attachArgs, false, false, true).stream().filter(s -> !s.isEmpty())
+        .toArray(String[]::new);
     }
     return new String[0];
   }
@@ -233,7 +235,7 @@ public class SdkFields {
       args = ArrayUtil.append(args, "--devtools-server-address=http://" + instance.host() + ":" + instance.port());
     }
     catch (Exception e) {
-      FlutterUtils.warn(LOG, e, true);
+      FlutterUtils.warn(LOG, "Error while starting DevTools", e, true);
     }
     command = flutterSdk.flutterRun(root, main.getFile(), device, runMode, flutterLaunchMode, project, args);
     final GeneralCommandLine commandLine = command.createGeneralCommandLine(project);
